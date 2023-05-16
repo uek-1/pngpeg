@@ -7,7 +7,11 @@ pub struct PngChunk {
 }
 
 pub enum ChunkType {
-    IHDR,   
+    IHDR,  
+    PLTE,
+    IDAT,
+    IEND,
+    Unknown,
 }
 
 
@@ -21,7 +25,7 @@ impl PngChunk {
             chunk_length : c_length,
             chunk_type : c_type,
             chunk_data : c_data,
-            chunk_crc : c_crc,
+            chunk_crc : c_crc, 
         } 
     }
 
@@ -34,7 +38,13 @@ impl PngChunk {
     }
 
     pub fn type_from_bytes(bytes : &[u8]) -> ChunkType {
-        ChunkType::IHDR
+        match bytes {
+            [73u8, 72u8, 68u8, 82u8] => ChunkType::IHDR,
+            [80u8, 76u8, 84u8, 69u8] => ChunkType::PLTE,
+            [73u8, 68u8, 65u8, 84u8] => ChunkType::IDAT,
+            [73u8, 69u8, 78u8, 68u8] => ChunkType::IEND,
+            _ => ChunkType::Unknown,
+        }
     }
 }
 
@@ -42,6 +52,10 @@ impl std::fmt::Display for ChunkType {
     fn fmt(&self, f :&mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             ChunkType::IHDR => write!(f, "IHDR"),
+            ChunkType::IDAT => write!(f, "IDAT"),
+            ChunkType::IEND => write!(f, "IEND"),
+            ChunkType::PLTE => write!(f, "PLTE"),
+            ChunkType::Unknown => write!(f, "Unknown"),
         }
     }
 }
