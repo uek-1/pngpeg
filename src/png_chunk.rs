@@ -1,3 +1,4 @@
+use crate::crc::*;
 
 pub struct PngChunk {
     chunk_length : usize,
@@ -17,7 +18,12 @@ pub enum ChunkType {
 
 impl PngChunk {
     pub fn verify_crc(&self) -> bool { 
-        true
+        //CRC POLYNOMIAL - x32 + x26 + x23 + x22 + x16 + x12 + x11 + x10 + x8 + x7 + x5 + x4 + x2 + x + 1
+        let chunk_data = self.get_data();
+        let mut crc_data = ChunkType::bytes_from_type(self.get_type()).to_vec();
+        crc_data.append(&mut chunk_data.clone());
+
+        self.get_crc() == png_crc(crc_data)
     }
 
     pub fn new(c_length: usize, c_type: ChunkType, c_data: Vec<u8>, c_crc: [u8;4]) -> PngChunk {
@@ -37,13 +43,32 @@ impl PngChunk {
         &self.chunk_type
     }
 
-    pub fn type_from_bytes(bytes : &[u8]) -> ChunkType {
+    pub fn get_data(&self) -> &Vec<u8> {
+        &self.chunk_data
+    }
+
+    pub fn get_crc(&self) -> [u8; 4] {
+        self.chunk_crc
+    }
+    
+}
+impl ChunkType{
+    pub fn type_from_bytes(bytes : [u8; 4]) -> ChunkType {
         match bytes {
             [73u8, 72u8, 68u8, 82u8] => ChunkType::IHDR,
             [80u8, 76u8, 84u8, 69u8] => ChunkType::PLTE,
             [73u8, 68u8, 65u8, 84u8] => ChunkType::IDAT,
             [73u8, 69u8, 78u8, 68u8] => ChunkType::IEND,
             _ => ChunkType::Unknown,
+        }
+    }
+    pub fn bytes_from_type(chunktype: &ChunkType) -> [u8; 4] {
+        match chunktype {
+            ChunkType::IHDR => [73u8, 72u8, 68u8, 82u8],
+            ChunkType::PLTE => [80u8, 76u8, 84u8, 69u8], 
+            ChunkType::IDAT => [73u8, 68u8, 65u8, 84u8], 
+            ChunkType::IEND => [73u8, 69u8, 78u8, 68u8],
+            ChunkType::Unknown => panic!("ChunkType::Unknown has no defined bytes!"),           
         }
     }
 }
@@ -57,5 +82,17 @@ impl std::fmt::Display for ChunkType {
             ChunkType::PLTE => write!(f, "PLTE"),
             ChunkType::Unknown => write!(f, "Unknown"),
         }
+    }
+}
+
+impl std::fmt::Display for PngChunk {
+    fn fmt(&self, f :&mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut crc_str = "".to_string();
+        for byte in self.get_crc() {
+            crc_str += &format!("{} ", byte);
+        }
+
+        let display_str = format!("TYPE : {}, LENGTH : {}, CRC : {}", self.get_type(), self.get_length(), crc_str);
+        write!(f, "{}", display_str)
     }
 }

@@ -7,6 +7,7 @@ mod png_file;
 use png_file::Png;
 
 mod png_chunk;
+mod crc;
 
 struct Cli {
     path: String,
@@ -16,7 +17,7 @@ fn main() -> io::Result<()> {
     let args = Cli {
         path : match std::env::args().nth(1) {
             Some(x) => x,
-            None => "".to_string(),
+            None => panic!("No file specified!"),
         },
     };
 
@@ -29,7 +30,7 @@ fn main() -> io::Result<()> {
 
     let png_file = match Png::from_bytes(buffer) {
         Ok(x) => x,
-        Err(_) => return Ok(()),
+        Err(_) => panic!("FAILED TO READ FROM BYTES"),
     };
     
     png_file.print_chunks();

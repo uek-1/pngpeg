@@ -17,7 +17,7 @@ impl Png {
     
     pub fn print_chunks(&self) {
         for (num, chunk) in self.chunks.iter().enumerate() {
-            println!("Chunk {} Type : {}, Length : {}",num, chunk.get_type(), chunk.get_length());
+            println!("Chunk {}, {}", num, chunk);
         }
     }
 
@@ -41,6 +41,9 @@ impl Png {
                 break;
             }
             
+            //ALL SLICES ARE ABLE TO BE UNRWRAPPED INTO ARRAYS BECAUSE THERE ARE AT LEAST 12 BYTES
+            //IN THE BUFFER.
+
             //Get length of chunk data, which is stored in the first 4 bytes of the chunk
             let chunk_length_bytes = &buffer_mut[..4];
             let chunk_length: usize = u32::from_be_bytes(chunk_length_bytes.try_into().unwrap()) as usize;  
@@ -48,7 +51,7 @@ impl Png {
             //Get type of chunk, which is stored in the 4th-8th bytes of the chunk
             let chunk_type_bytes = &buffer_mut[4..8];
             let chunk_type_string = String::from_utf8_lossy(chunk_type_bytes);
-            let chunk_type = PngChunk::type_from_bytes(chunk_type_bytes);
+            let chunk_type = ChunkType::type_from_bytes(chunk_type_bytes.try_into().unwrap());
             //Get chunk data
             let chunk_data = &buffer_mut[8..8+chunk_length];
             
@@ -70,7 +73,7 @@ impl Png {
             };
             
                         
-            println!("TYPE {}, LENGTH {}", chunk_type_string, chunk_length);
+            //println!("TYPE {}, LENGTH {}", chunk_type_string, chunk_length);
             //Update buffer
             buffer_mut = &buffer_mut[12 + chunk_length..];
         }
