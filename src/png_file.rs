@@ -65,11 +65,13 @@ impl Png {
                 chunk_data.to_vec(),
                 chunk_crc_bytes.try_into().unwrap(),
             );
-
+            
+            println!("{}", png_chunk);
+            
             //Verify CRC
             match png_chunk.verify_crc() {
                 true => out_png.add_chunk(png_chunk),
-                false => return Err("Invalid CRC!")
+                false => (),//return Err("Invalid CRC!")
             };
             
                         

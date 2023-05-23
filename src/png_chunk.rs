@@ -18,7 +18,6 @@ pub enum ChunkType {
 
 impl PngChunk {
     pub fn verify_crc(&self) -> bool { 
-        //CRC POLYNOMIAL - x32 + x26 + x23 + x22 + x16 + x12 + x11 + x10 + x8 + x7 + x5 + x4 + x2 + x + 1
         let chunk_data = self.get_data();
         let mut crc_data = ChunkType::bytes_from_type(self.get_type()).to_vec();
         crc_data.append(&mut chunk_data.clone());
