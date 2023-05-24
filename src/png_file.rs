@@ -67,13 +67,14 @@ impl Png {
             );
             
             println!("{}", png_chunk);
-            
+             
             //Verify CRC
             match png_chunk.verify_crc() {
                 true => out_png.add_chunk(png_chunk),
                 false => (),//return Err("Invalid CRC!")
             };
             
+        
                         
             //println!("TYPE {}, LENGTH {}", chunk_type_string, chunk_length);
             //Update buffer
