@@ -1,95 +1,31 @@
 pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
-    let poly = 0x04C11DB7u32; 
-    let mut poly_stack = 0u32;
-    let mut padded_bytes = bytes;
-    padded_bytes.append(&mut vec![0u8;4]);
+    const POLY : u32 = 0x04C11DB7u32;
+    
     let mut register = 0u32;
     
-    //Read 4 bytes into register. We just padded it with 4 so the unwrap is safe:
-    let mut shifts = 3;
-    for byte in padded_bytes.clone().into_iter().take(4) {
-        register += (byte as u32) << 8 * shifts;
-        shifts -= 1;
-    }
+    let mut padding = vec![255u8; 4];
+    let mut padded_bytes = bytes;
+    padded_bytes.append(&mut padding);
+    let mut padded_bits = Bits::new(padded_bytes);
 
-    //Turn padded_bytes into an iter so we can read from the start:
-    let mut padded_bytes = padded_bytes.into_iter();
-
-    //CRC process :
     loop {
-        //println!("REGISTER {:#b}", register);
-        //Attempt to read a byte from padded_bytes
-        let next_byte = match padded_bytes.next() {
+        let next_bit : u32 = match padded_bits.read_bits(1) {
             Some(x) => x,
             None => break,
         };
 
-        //Read topmost byte:
-        let mut top = register >> 24;
-    
-        //Pop topmost byte from register:
-        register = register << 8;
+        let popped_bit = register >> 31;
+        register = (register << 1) + next_bit;
 
-        //Add next byte to register:
-        register = register + next_byte as u32;
-
-        //Caclulate poly_stack :
-        for i in 0..8 {
-            //println!("poly stack {:#b}", poly_stack);
-            //Read first (MSB) bit of top:
-            top = (top << 1) ^ match (top >> 7) & 1 {
-                //If its a 0, there is no XOR operation
-                0 => 0, 
-                //If its a 1, add poly << 8 to poly_stack because the nth bit of the top byte will
-                //affect 32 - 8 - n bits of the next 4 bytes. 
-                _ => {
-                    poly_stack = poly_stack ^ (poly << (8 - i));
-                    poly
-                },
-            };
-        }
-
-        //XOR register with poly_stack:
-        register = register ^ poly_stack;
+        match popped_bit {
+            0 => (),
+            _ => register = register ^ POLY,
+        };
     }
-    println!("CRC: ");
-    for byte in register.clone().to_be_bytes() {
-        print!("{} ", byte);
-    }
-    println!("");
-    //Since the loop broke, register contains only the last four bytes - the remainder
-    register.to_be_bytes()
+
+    println!("CRC {:#x}", register);
+    register.to_le_bytes()
 }
-/*
-    
-    //Create bitstream
-    for byte in bytes {
-        let mut padded_byte = (crc << 8) + (byte as u64);
-        
-        for i in 0..8 {
-            //println!("{:#b}", padded_byte);
-            padded_byte = match padded_byte & 1 {
-                0 => (padded_byte >> 1 ) & 0x7FFFFFFF,                     //skip if first (last in MSB) byte is 0
-                _ => ((padded_byte >> 1) & 0x7FFFFFFF)^ poly,            //XOR bits with poly. But
-                  //because poly does not encode the x^31 term - which always results in 0, we can
-                  //implicitly calculate the XOR by right shifting.
-            };
-        }
-        
-        //XOR crc with next bytes crc.
-        crc = (crc ^ padded_byte); 
-    }
-    
-    crc = !crc;
-    //temp_bits = !temp_bits;
-    for i in crc.to_be_bytes().iter().skip(4) {
-        print!("{} ", !i);
-    } 
-    println!();
-
-    [0u8,0u8,0u8,0u8]
-}   
-*/
 
 struct Bits {
     bytes: Vec<u8>,
@@ -133,3 +69,9 @@ impl Bits {
     } 
 }
 
+fn main() {
+    let mut bits = Bits::new(vec![0b10010110u8]);
+    for _i in 0..8{
+        println!("{:#b}", bits.read_bits(1).unwrap());
+    }
+}
