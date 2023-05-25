@@ -15,14 +15,17 @@ pub enum ChunkType {
     Unknown,
 }
 
-
 impl PngChunk {
-    pub fn verify_crc(&self) -> bool { 
+    pub fn verify_crc(&self) -> Result<bool, &'static str> { 
         let chunk_data = self.get_data();
         let mut crc_data = ChunkType::bytes_from_type(self.get_type()).to_vec();
         crc_data.append(&mut chunk_data.clone());
-
-        self.get_crc() == png_crc(crc_data)
+        
+        match png_crc(crc_data) {
+            Ok(x) if x == self.get_crc() => Ok(true),
+            Ok(_) => Ok(false),
+            Err(x) => Err(x),
+        }
     }
 
     pub fn new(c_length: usize, c_type: ChunkType, c_data: Vec<u8>, c_crc: [u8;4]) -> PngChunk {
@@ -50,7 +53,11 @@ impl PngChunk {
         self.chunk_crc
     }
     
+    pub fn decompress(&mut self) -> Result<(), & 'static str>{
+        Err("DECOMPRESSION FAILED!")
+    }
 }
+
 impl ChunkType{
     pub fn type_from_bytes(bytes : [u8; 4]) -> ChunkType {
         match bytes {

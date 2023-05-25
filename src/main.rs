@@ -30,7 +30,7 @@ fn main() -> io::Result<()> {
 
     let png_file = match Png::from_bytes(buffer) {
         Ok(x) => x,
-        Err(_) => panic!("FAILED TO READ FROM BYTES"),
+        Err(e) => panic!("{}", e),
     };
     
     png_file.print_chunks();

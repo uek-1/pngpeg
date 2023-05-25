@@ -1,4 +1,4 @@
-pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
+pub fn png_crc(bytes: Vec<u8>) -> Result<[u8; 4], & 'static str> {
     const POLY : u32 = 0x04C11DB7;
     const XOROUT : u32 = 0xFFFFFFFF;
     const INIT : u32 = 0xFFFFFFFF;
@@ -12,7 +12,7 @@ pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
     
     let mut register = match padded_bits.read_bits(32, REFIN) {
         Some(x) => x,
-        None => 0,
+        None => return Err("Error while reading initial 32 bits into register. It's likely that the padding failed."),
     };
     
     //INIT value - see https://stackoverflow.com/questions/43823923/implementation-of-crc-8-what-does-the-init-parameter-do:
@@ -38,7 +38,7 @@ pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
     
     register = register ^ XOROUT;
 
-    register.to_be_bytes()
+    Ok(register.to_be_bytes())
 }
 
 struct Bits {
@@ -60,7 +60,6 @@ impl Bits {
         }
 
         let mut value = 0u32;
-        //TODO: TEST WITH LSB (THIS IS MSB!) READING, WITH AND WIHTOT INVERSION
         for i in self.position..(self.position+num) {
             let byte_index = (i / 8) as usize;
             let byte = match lsb {
@@ -68,7 +67,7 @@ impl Bits {
                 true => self.bytes[byte_index].reverse_bits(),
             };
 
-            let shift = 7 - (i % 8); // MSB : 7 - (i % 8);
+            let shift = 7 - (i % 8);
             let bit = (byte >> shift) as u32 & 1;
             value = (value << 1) | bit;
         }
@@ -87,9 +86,3 @@ impl Bits {
     } 
 }
 
-fn main() {
-    let mut bits = Bits::new(vec![0b10010110u8]);
-    for _i in 0..8{
-        println!("{:#b}", bits.read_bits(1, true).unwrap());
-    }
-}
