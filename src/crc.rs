@@ -1,15 +1,25 @@
 pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
-    const POLY : u32 = 0x04C11DB7u32;
-    
-    let mut register = 0u32;
-    
-    let mut padding = vec![255u8; 4];
+    const POLY : u32 = 0x04C11DB7;
+    const XOROUT : u32 = 0xFFFFFFFF;
+    const INIT : u32 = 0xFFFFFFFF;
+    const REFIN : bool = true;
+    const REFOUT : bool = true;
+
+    let mut padding = vec![0u8; 4];
     let mut padded_bytes = bytes;
     padded_bytes.append(&mut padding);
     let mut padded_bits = Bits::new(padded_bytes);
+    
+    let mut register = match padded_bits.read_bits(32, REFIN) {
+        Some(x) => x,
+        None => 0,
+    };
+    
+    //INIT value - see https://stackoverflow.com/questions/43823923/implementation-of-crc-8-what-does-the-init-parameter-do:
+    register = register ^ INIT;
 
     loop {
-        let next_bit : u32 = match padded_bits.read_bits(1) {
+        let next_bit : u32 = match padded_bits.read_bits(1, REFIN) {
             Some(x) => x,
             None => break,
         };
@@ -22,9 +32,13 @@ pub fn png_crc(bytes: Vec<u8>) -> [u8; 4]{
             _ => register = register ^ POLY,
         };
     }
+    if REFOUT {
+        register = register.reverse_bits();
+    }
+    
+    register = register ^ XOROUT;
 
-    println!("CRC {:#x}", register);
-    register.to_le_bytes()
+    register.to_be_bytes()
 }
 
 struct Bits {
@@ -40,7 +54,7 @@ impl Bits {
         }
     }
 
-    pub fn read_bits(&mut self, num : u32) -> Option<u32> { 
+    pub fn read_bits(&mut self, num : u32, lsb : bool) -> Option<u32> { 
         if self.len() as i32 - (num as i32) < 0 {
             return None;
         }
@@ -49,7 +63,11 @@ impl Bits {
         //TODO: TEST WITH LSB (THIS IS MSB!) READING, WITH AND WIHTOT INVERSION
         for i in self.position..(self.position+num) {
             let byte_index = (i / 8) as usize;
-            let byte = self.bytes[byte_index];
+            let byte = match lsb {
+                false => self.bytes[byte_index],
+                true => self.bytes[byte_index].reverse_bits(),
+            };
+
             let shift = 7 - (i % 8); // MSB : 7 - (i % 8);
             let bit = (byte >> shift) as u32 & 1;
             value = (value << 1) | bit;
@@ -72,6 +90,6 @@ impl Bits {
 fn main() {
     let mut bits = Bits::new(vec![0b10010110u8]);
     for _i in 0..8{
-        println!("{:#b}", bits.read_bits(1).unwrap());
+        println!("{:#b}", bits.read_bits(1, true).unwrap());
     }
 }
