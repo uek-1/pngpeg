@@ -1,4 +1,4 @@
-use crate::crc::*;
+use crate::crc;
 
 pub struct PngChunk {
     chunk_length : usize,
@@ -21,7 +21,7 @@ impl PngChunk {
         let mut crc_data = ChunkType::bytes_from_type(self.get_type()).to_vec();
         crc_data.append(&mut chunk_data.clone());
         
-        match png_crc(crc_data) {
+        match crc::png_crc(crc_data) {
             Ok(x) if x == self.get_crc() => Ok(true),
             Ok(_) => Ok(false),
             Err(x) => Err(x),

@@ -1,6 +1,7 @@
 use crate::png_chunk::*;
 use crate::dec_png::*;
 use crate::pixel::Pixel;
+use crate::deflate;
 
 pub struct EncPng {  
     chunks : Vec<PngChunk>
@@ -23,7 +24,39 @@ impl EncPng {
         }
     }
 
-    pub fn from_bytes(buffer: Vec<u8>) -> Result<EncPng, &'static str> {
+    pub fn decompress(&self) -> Result<DecPng, &'static str> {
+        let compressed_stream = self.get_deflate_stream();
+        let decoded_stream = match deflate::decompress(compressed_stream) {
+            Ok(x) => x,
+            Err(e) => return Err(e),
+        };
+        
+        let defiltered_stream = match deflate::defilter(decoded_stream) {
+            Ok(x) => x,
+            Err(e) => return Err(e),
+        };
+
+        DecPng::try_from(defiltered_stream)
+    }
+
+    fn get_deflate_stream(&self) -> Vec<u8> {
+        let mut deflate_stream : Vec<u8> = vec![];
+
+        for chunk in self.chunks.iter() {
+            match chunk.get_type() {
+                ChunkType::IDAT => deflate_stream.append(&mut chunk.get_data().clone()),
+                _ => continue,
+            }; 
+        }
+
+        deflate_stream
+    } 
+}
+
+impl TryFrom<Vec<u8>> for EncPng {
+    type Error = &'static str;
+
+    fn try_from(buffer: Vec<u8>) -> Result<Self, Self::Error> {
         let mut out_png = EncPng::new();
     
         const PNG_HEADER : [u8; 8] = [137u8, 80u8, 78u8, 71u8, 13u8, 10u8, 26u8, 10u8];
@@ -79,22 +112,4 @@ impl EncPng {
         }
         Ok(out_png)
     }
-
-    pub fn decompress(&self) -> DecPng {
-        DecPng::new()
-    }
-
-    fn get_deflate_stream(&self) -> Vec<u8> {
-        let mut deflate_stream : Vec<u8> = vec![];
-
-        for chunk in self.chunks.iter() {
-            match chunk.get_type() {
-                ChunkType::IDAT => deflate_stream.append(&mut chunk.get_data().clone()),
-                _ => continue,
-            }; 
-        }
-
-        deflate_stream
-    } 
 }
-

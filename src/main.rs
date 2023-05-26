@@ -10,6 +10,7 @@ mod png_chunk;
 mod crc;
 mod dec_png;
 mod pixel;
+mod deflate;
 
 struct Cli {
     path: String,
@@ -30,7 +31,7 @@ fn main() -> io::Result<()> {
     reader.read_to_end(&mut buffer);
     let buffer = buffer;
 
-    let png_file = match EncPng::from_bytes(buffer) {
+    let png_file : EncPng = match buffer.try_into() {
         Ok(x) => x,
         Err(e) => panic!("{}", e),
     };
