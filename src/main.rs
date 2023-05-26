@@ -4,10 +4,11 @@ use std::io::BufReader;
 use std::fs::File;
 
 mod png_file;
-use png_file::Png;
+use png_file::EncPng;
 
 mod png_chunk;
 mod crc;
+mod png_stream;
 
 struct Cli {
     path: String,
@@ -28,7 +29,7 @@ fn main() -> io::Result<()> {
     reader.read_to_end(&mut buffer);
     let buffer = buffer;
 
-    let png_file = match Png::from_bytes(buffer) {
+    let png_file = match EncPng::from_bytes(buffer) {
         Ok(x) => x,
         Err(e) => panic!("{}", e),
     };
