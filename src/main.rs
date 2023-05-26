@@ -3,12 +3,13 @@ use std::io::Read;
 use std::io::BufReader;
 use std::fs::File;
 
-mod png_file;
-use png_file::EncPng;
+mod enc_png;
+use enc_png::EncPng;
 
 mod png_chunk;
 mod crc;
-mod png_stream;
+mod dec_png;
+mod pixel;
 
 struct Cli {
     path: String,

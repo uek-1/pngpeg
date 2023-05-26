@@ -1,5 +1,6 @@
 use crate::png_chunk::*;
-use crate::png_stream::*;
+use crate::dec_png::*;
+use crate::pixel::Pixel;
 
 pub struct EncPng {  
     chunks : Vec<PngChunk>
@@ -80,11 +81,7 @@ impl EncPng {
     }
 
     pub fn decompress(&self) -> DecPng {
-        
-
-        DecPng {
-
-        }
+        DecPng::new()
     }
 
     fn get_deflate_stream(&self) -> Vec<u8> {
