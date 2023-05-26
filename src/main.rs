@@ -1,16 +1,16 @@
-use std::io;
-use std::io::Read;
-use std::io::BufReader;
 use std::fs::File;
+use std::io;
+use std::io::BufReader;
+use std::io::Read;
 
 mod enc_png;
 use enc_png::EncPng;
 
-mod png_chunk;
 mod crc;
 mod dec_png;
-mod pixel;
 mod deflate;
+mod pixel;
+mod png_chunk;
 
 struct Cli {
     path: String,
@@ -18,7 +18,7 @@ struct Cli {
 
 fn main() -> io::Result<()> {
     let args = Cli {
-        path : match std::env::args().nth(1) {
+        path: match std::env::args().nth(1) {
             Some(x) => x,
             None => panic!("No file specified!"),
         },
@@ -27,18 +27,16 @@ fn main() -> io::Result<()> {
     let f = File::open(args.path)?;
     let mut reader = BufReader::new(f);
     let mut buffer = vec![];
-  
+
     reader.read_to_end(&mut buffer);
     let buffer = buffer;
 
-    let png_file : EncPng = match buffer.try_into() {
+    let png_file: EncPng = match buffer.try_into() {
         Ok(x) => x,
         Err(e) => panic!("{}", e),
     };
-    
+
     png_file.print_chunks();
-    
+
     Ok(())
 }
-
-

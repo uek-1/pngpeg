@@ -1,7 +1,3 @@
-pub struct Pixel {
+pub struct Pixel {}
 
-}
-
-impl Pixel {
-
-}
+impl Pixel {}
