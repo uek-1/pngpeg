@@ -46,7 +46,7 @@ impl EncPng {
                 _ => continue,
             };
         }
-
+        println!("{}", deflate_stream.len());
         deflate_stream
     }
 }
@@ -97,10 +97,11 @@ impl TryFrom<Vec<u8>> for EncPng {
                 chunk_data.to_vec(),
                 chunk_crc_bytes.try_into().unwrap(),
             );
-
+            
             match png_chunk.verify_crc() {
                 Ok(false) => return Err("Invalid CRC!"),
-                Ok(_) => (),
+                Ok(_) => (), 
+                Err(_) if *png_chunk.get_type() == ChunkType::Unknown => (),
                 Err(x) => return Err(x),
             };
 

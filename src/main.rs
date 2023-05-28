@@ -8,6 +8,7 @@ use enc_png::EncPng;
 
 mod crc;
 mod dec_png;
+use dec_png::DecPng;
 mod deflate;
 mod pixel;
 mod png_chunk;
@@ -37,6 +38,12 @@ fn main() -> io::Result<()> {
     };
 
     png_file.print_chunks();
+
+    let dec_png_file : DecPng = match png_file.decompress() {
+        Ok(x) => x,
+        Err(e) => panic!("{}", e),
+    };
+
 
     Ok(())
 }

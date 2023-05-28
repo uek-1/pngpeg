@@ -7,6 +7,7 @@ pub struct PngChunk {
     chunk_crc: [u8; 4],
 }
 
+#[derive(PartialEq)]
 pub enum ChunkType {
     IHDR,
     PLTE,
@@ -18,7 +19,7 @@ pub enum ChunkType {
 impl PngChunk {
     pub fn verify_crc(&self) -> Result<bool, &'static str> {
         let chunk_data = self.get_data();
-        let mut crc_data = ChunkType::bytes_from_type(self.get_type()).to_vec();
+        let mut crc_data = ChunkType::bytes_from_type(self.get_type())?.to_vec();
         crc_data.append(&mut chunk_data.clone());
 
         match crc::png_crc(crc_data) {
@@ -68,13 +69,13 @@ impl ChunkType {
             _ => ChunkType::Unknown,
         }
     }
-    pub fn bytes_from_type(chunktype: &ChunkType) -> [u8; 4] {
+    pub fn bytes_from_type(chunktype: &ChunkType) -> Result<[u8; 4], & 'static str> {
         match chunktype {
-            ChunkType::IHDR => [73u8, 72u8, 68u8, 82u8],
-            ChunkType::PLTE => [80u8, 76u8, 84u8, 69u8],
-            ChunkType::IDAT => [73u8, 68u8, 65u8, 84u8],
-            ChunkType::IEND => [73u8, 69u8, 78u8, 68u8],
-            ChunkType::Unknown => panic!("ChunkType::Unknown has no defined bytes!"),
+            ChunkType::IHDR => Ok([73u8, 72u8, 68u8, 82u8]),
+            ChunkType::PLTE => Ok([80u8, 76u8, 84u8, 69u8]),
+            ChunkType::IDAT => Ok([73u8, 68u8, 65u8, 84u8]),
+            ChunkType::IEND => Ok([73u8, 69u8, 78u8, 68u8]),
+            ChunkType::Unknown => Err("ChunkType::Unknown has no defined bytes!"),
         }
     }
 }
