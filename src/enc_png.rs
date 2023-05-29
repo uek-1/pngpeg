@@ -24,15 +24,9 @@ impl EncPng {
 
     pub fn decompress(&self) -> Result<DecPng, &'static str> {
         let compressed_stream = self.get_deflate_stream();
-        let decoded_stream = match deflate::decompress(compressed_stream) {
-            Ok(x) => x,
-            Err(e) => return Err(e),
-        };
+        let decoded_stream = deflate::decompress(compressed_stream)?;
 
-        let defiltered_stream = match deflate::defilter(decoded_stream) {
-            Ok(x) => x,
-            Err(e) => return Err(e),
-        };
+        let defiltered_stream = deflate::defilter(decoded_stream)?;
 
         DecPng::try_from(defiltered_stream)
     }

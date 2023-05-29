@@ -20,10 +20,7 @@ struct Cli {
 
 fn main() -> io::Result<()> {
     let args = Cli {
-        path: match std::env::args().nth(1) {
-            Some(x) => x,
-            None => panic!("No file specified!"),
-        },
+        path: std::env::args().nth(1).expect("No file specified!")
     };
 
     let f = File::open(args.path)?;
@@ -33,16 +30,10 @@ fn main() -> io::Result<()> {
     reader.read_to_end(&mut buffer);
     let buffer = buffer;
 
-    let png_file: EncPng = match buffer.try_into() {
-        Ok(x) => x,
-        Err(e) => panic!("{}", e),
-    };
+    let png_file: EncPng = buffer.try_into().expect("Couldn't read PNG file!");
 
     png_file.print_chunks();
-    let dec_png_file : DecPng = match png_file.decompress() {
-        Ok(x) => x,
-        Err(e) => panic!("{}", e),
-    };
+    let dec_png_file : DecPng = png_file.decompress().expect("Couldn't decompress PNG file");
 
 
     Ok(())
