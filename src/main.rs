@@ -12,6 +12,7 @@ use dec_png::DecPng;
 mod deflate;
 mod pixel;
 mod png_chunk;
+mod bits;
 
 struct Cli {
     path: String,
@@ -38,7 +39,6 @@ fn main() -> io::Result<()> {
     };
 
     png_file.print_chunks();
-
     let dec_png_file : DecPng = match png_file.decompress() {
         Ok(x) => x,
         Err(e) => panic!("{}", e),
