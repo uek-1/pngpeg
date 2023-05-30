@@ -10,6 +10,11 @@ impl Bits {
     }
 
     pub fn read_bits(&mut self, num: u32) -> Option<u32> {
+        //Clearly I can only pack 32 bits into a u32.
+        if num > 32 {
+            return None;
+        }
+
         if self.len() as i32 - (num as i32) < 0 {
             return None;
         }
