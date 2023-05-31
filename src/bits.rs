@@ -36,6 +36,16 @@ impl Bits {
         Some(value)
     }
 
+    pub fn skip_byte(&mut self)  {
+        let curr_byte_index = (self.position / 8) as usize;
+        loop {
+            self.position += 1;
+            if (self.position / 8 ) as usize == curr_byte_index {
+                break;
+            }
+        }
+    }
+
     pub fn len(&self) -> u32 {
         let len_i32: i32 = 8 * self.bytes.len() as i32 - self.position as i32;
 

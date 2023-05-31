@@ -1,4 +1,4 @@
-use crate::dec_png::*;
+use crate::dec_png::DecPng;
 use crate::deflate;
 use crate::pixel::Pixel;
 use crate::png_chunk::*;
@@ -22,16 +22,11 @@ impl EncPng {
         }
     }
 
-    pub fn decompress(&self) -> Result<DecPng, &'static str> {
-        let compressed_stream = self.get_deflate_stream();
-        let decoded_stream = deflate::decompress(compressed_stream)?;
-
-        let defiltered_stream = deflate::defilter(decoded_stream)?;
-
-        DecPng::try_from(defiltered_stream)
+    pub fn decompress(self) -> Result<DecPng, &'static str> {
+        DecPng::try_from(self)
     }
 
-    fn get_deflate_stream(&self) -> Vec<u8> {
+    pub fn get_deflate_stream(&self) -> Vec<u8> {
         let mut deflate_stream: Vec<u8> = vec![];
 
         for chunk in self.chunks.iter() {
@@ -42,6 +37,31 @@ impl EncPng {
         }
         println!("{}", deflate_stream.len());
         deflate_stream
+    }
+
+    pub fn get_width(&self) -> u32 { 
+        self.chunks
+            .iter()
+            .find(|x| *x.get_type() == ChunkType::IHDR)
+            .unwrap()
+            .get_data()
+            .clone()
+            .into_iter()
+            .take(4)
+            .fold(0u32, |width, x| (width << 8) + x as u32)
+    }
+
+    pub fn get_height(&self) -> u32 {
+        self.chunks
+            .iter()
+            .find(|x| *x.get_type() == ChunkType::IHDR)
+            .unwrap()
+            .get_data()
+            .clone()
+            .into_iter()
+            .skip(4)
+            .take(4)
+            .fold(0u32, |height, x| (height << 8) + x as u32)
     }
 }
 

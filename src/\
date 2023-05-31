@@ -27,10 +27,9 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        println!("PNG DIMENSIONS : width {} height {}", encpng.get_width(), encpng.get_height());
         let compressed_stream = encpng.get_deflate_stream();
         let decoded_stream = deflate::decompress(compressed_stream)?;
-        let defiltered_stream = deflate::defilter(decoded_stream, encpng.get_height(), encpng.get_width())?;
+        let defiltered_stream = deflate::defilter(decoded_stream, encpng.get_width())?;
         
         Ok(DecPng::new())
     }
