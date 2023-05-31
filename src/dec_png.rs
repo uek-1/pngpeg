@@ -27,14 +27,23 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        println!("PNG DIMENSIONS : width {} height {}", encpng.get_width(), encpng.get_height());
+        let (height, width, depth) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth());
+        
+        let bpp = match (depth / 8) {
+            0 => 1,
+            _ => depth / 8,
+        } as usize;
+
+        println!("PNG DIMENSIONS : width {} height {}", width, height);
+
         let compressed_stream = encpng.get_deflate_stream();
         let decoded_stream = deflate::decompress(compressed_stream)?;
-        let defiltered_stream = deflate::defilter(decoded_stream, encpng.get_height(), encpng.get_width())?;
+        let defiltered_stream = deflate::defilter(decoded_stream, height, width, bpp)?;
         
         Ok(DecPng::new())
     }
 }
+
 
 struct Pixels(Vec<Pixel>);
 

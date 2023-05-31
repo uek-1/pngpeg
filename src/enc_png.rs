@@ -63,6 +63,19 @@ impl EncPng {
             .take(4)
             .fold(0u32, |height, x| (height << 8) + x as u32)
     }
+
+    pub fn get_pixel_depth(&self) -> u32 { 
+        self.chunks
+            .iter()
+            .find(|x| *x.get_type() == ChunkType::IHDR)
+            .unwrap()
+            .get_data()
+            .clone()
+            .into_iter()
+            .skip(8)
+            .take(1)
+            .fold(0u32, |depth, x| (depth << 8) + x as u32)
+    }
 }
 
 impl TryFrom<Vec<u8>> for EncPng {

@@ -3,8 +3,6 @@ use std::collections::HashMap;
 
 pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     //implementation of zlib deflate algorithm
-    let mut decoded_stream: Vec<u8> = vec![];
-     
     let first_byte = deflate_stream.get(0).expect("Deflate stream is empty!");
 
     let cmf = first_byte & 0x0fu8;
@@ -39,7 +37,7 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
         }
     }
 
-    Ok(decoded_stream)
+    Ok(out)
 }
 
 fn decode_block_dynamic(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
@@ -406,8 +404,151 @@ fn generate_dist_table() -> HashMap<u32, (u32,u32)> {
     dist_table
 }
 
-pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32) -> Result<Vec<Vec<u8>>, &'static str> {
+pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32, bpp: usize) -> Result<Vec<Vec<u8>>, &'static str> {
+    println!("{} in {} scanlines" , decoded_stream.len(), height);
+    let line_size = decoded_stream.len() / height as usize; 
+    let scanlines : Vec<Vec<u8>> = decoded_stream
+                                                .chunks(line_size)
+                                                .map(|x| x.to_vec())
+                                                .collect();
+    let mut filtered = scanlines.clone();
+
+    for (index, line) in scanlines.into_iter().enumerate() {
+        filtered[index] = Filters::filter(index, &filtered, bpp);
+    }
+
     Ok(vec![])
 }
 
+struct Filters {
+
+}
+
+impl Filters {
+    pub fn filter(line_num: usize, scanlines: &Vec<Vec<u8>>, bpp: usize) -> Vec<u8>{
+        let line = scanlines[line_num].clone();
+        let (filter, line) = line.split_at(1);
+
+        match filter[0].reverse_bits() {
+            0 => line.to_vec(),
+            1 => Self::sub(line_num, scanlines, bpp),
+            2 => Self::up(line_num, scanlines),
+            3 => Self::ave(line_num, scanlines, bpp),
+            4 => Self::paeth(line_num, scanlines, bpp),
+            _ => vec![]
+        }
+    }
+    
+    fn get_filterless_line(line_num : usize, scanlines : &Vec<Vec<u8>>) -> Vec<u8> {
+        let mut line = scanlines[line_num].clone();
+        line.into_iter().skip(1).collect()
+    }
+    
+    //NOTE: scanlines is always accessed with index + 1 because get_filterless_line has 1 less elem
+    //per line than scanlines.
+
+    fn sub(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp : usize) -> Vec<u8> {
+        println!("sub");
+        let mut out = vec![];
+        let mut line = Self::get_filterless_line(line_num, scanlines);
+       
+        for (index, byte) in line.iter().enumerate() {
+            let defiltered_byte = *byte as u32 + match index {
+                0 => 0,
+                _ => scanlines[line_num][index-bpp],
+            } as u32;
+            
+            let defiltered_byte = (defiltered_byte % 255) as u8;
+
+            out.push(defiltered_byte);
+        }
+
+        out
+    }
+
+    fn up(line_num : usize , scanlines : &Vec<Vec<u8>>) -> Vec<u8> {
+        println!("up");
+        let mut out = vec![];
+        let mut line = Self::get_filterless_line(line_num, scanlines);
+
+        for (index, byte) in line.iter().enumerate() { 
+            let defiltered_byte = *byte as u32 + match line_num { 
+                0 => 0,
+                _ => scanlines[line_num - 1][index], 
+            } as u32;
+            
+            let defiltered_byte = (defiltered_byte % 255) as u8;
+
+            out.push(defiltered_byte);
+        }
+
+        out
+    }
+
+    fn ave(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp : usize) -> Vec<u8> {
+        println!("ave");
+        let mut out = vec![];
+        let mut line = Self::get_filterless_line(line_num, scanlines);
+
+        for (index, byte) in line.iter().enumerate() {
+            let left : u8 = match index {
+                0 => 0,
+                _ => scanlines[line_num][index-bpp],
+            };
+            let up : u8 = match line_num {
+                0 => 0,
+                _ => scanlines[line_num - 1][index], 
+            };
+            //MAY CAUSE ERRORS DUE TO ROUNDING - CONV TO F64:
+            let av : u8 = (left + up ) / 2; 
+            let defiltered_byte = ((*byte as u32  + av as u32)%255) as u8;
+            out.push(defiltered_byte);
+        }
+
+        out
+    }
+
+    fn paeth(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp: usize) -> Vec<u8> {
+        println!("paeth");
+        let mut out = vec![]; 
+        let mut line = Self::get_filterless_line(line_num, scanlines);
+
+        for (index, byte) in line.iter().enumerate() { 
+            let left : u8 = match index {
+                0 => 0,
+                _ => scanlines[line_num][index-bpp],
+            };
+
+            let up : u8 = match line_num {
+                0 => 0,
+                _ => scanlines[line_num-1][index],
+            };
+
+            let up_left : u8 = match (line_num, index) {
+                (0,_) => 0,
+                (_,0) => 0,
+                _ => scanlines[line_num-1][index-bpp],
+            };
+
+            let paeth_predictor = |l, u, ul| { 
+                let p = l as i32 + u as i32 - ul as i32;
+                let pa = (p - l as i32).abs();
+                let pb = (p - u as i32).abs();
+                let pc = (p - ul as i32).abs();
+                if pa <= pb && pa <= pc {
+                    return pa as u32;
+                }
+                else if pb <= pc {
+                    return pb as u32;
+                }
+                pc as u32
+            };
+            
+            let defiltered_byte = *byte as u32 + (paeth_predictor(left as u32, up as u32, up_left as u32));
+            out.push((defiltered_byte % 255) as u8);
+        }
+
+        out
+    }
+}
 
