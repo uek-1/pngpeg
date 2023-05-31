@@ -417,7 +417,7 @@ pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32, bpp: usize) -
         filtered[index] = Filters::filter(index, &filtered, bpp);
     }
 
-    Ok(vec![])
+    Ok(filtered)
 }
 
 struct Filters {
@@ -509,7 +509,7 @@ impl Filters {
     }
 
     fn paeth(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp: usize) -> Vec<u8> {
-        println!("paeth");
+        //println!("paeth");
         let mut out = vec![]; 
         let mut line = Self::get_filterless_line(line_num, scanlines);
 

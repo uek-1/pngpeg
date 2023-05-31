@@ -1,6 +1,7 @@
 use crate::pixel::Pixel;
 use crate::enc_png::EncPng;
 use crate::deflate;
+use std::fs;
 
 pub struct DecPng {
     scanlines: Vec<Pixels>,
@@ -27,7 +28,7 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        let (height, width, depth) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth());
+        let (height, width, depth, color) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth(), encpng.get_color_type());
         
         let bpp = match (depth / 8) {
             0 => 1,
@@ -40,6 +41,33 @@ impl TryFrom<EncPng> for DecPng {
         let decoded_stream = deflate::decompress(compressed_stream)?;
         let defiltered_stream = deflate::defilter(decoded_stream, height, width, bpp)?;
         
+        println!("depth {} bpp {} color {}", depth, bpp, color);
+
+        let mut write_string = String::from("");
+
+        let mut char_count = 0;
+        for scanline in defiltered_stream {
+            for pattern in scanline.chunks(3) {
+                let triple_str = match pattern {
+                    &[r,g,b] => format!("{r} {g} {b}  "),
+                    _ => String::from(" "),
+                };
+
+                if char_count + 13 > 70 {
+                    write_string.push_str("\n");
+                    write_string.push_str(&triple_str);
+                    char_count = 0;
+                    continue;
+                }
+
+                char_count += 13;
+                write_string.push_str(&triple_str);
+            }
+            write_string.push_str("\n");
+        }
+        
+        fs::write("out.ppm", write_string).expect("Unable to write file");
+
         Ok(DecPng::new())
     }
 }
