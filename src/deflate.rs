@@ -1,19 +1,35 @@
 use crate::bits::Bits;
 use std::collections::HashMap;
+use miniz_oxide::inflate::decompress_to_vec_zlib;
 
 pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     //implementation of zlib deflate algorithm
-    let first_byte = deflate_stream.get(0).expect("Deflate stream is empty!");
+    let test : Vec<u8> = decompress_to_vec_zlib(&deflate_stream).expect("t");
+    /*
+    for i in 0..4 {
+        println!("{}",test[i]);
+    }
+    println!("{}", test.len());
+    */
 
+    return Ok(test);
+    
+    let first_byte = deflate_stream.get(0).expect("Deflate stream is empty!");
+    
     let cmf = first_byte & 0x0fu8;
     let window_size = 2_u32.pow(((first_byte >> 4) + 8) as u32); 
     
-    println!("Compression type: {cmf}");
+    println!("Compression method (cmf): {cmf}");
     println!("Compression window: {window_size}");
 
     let (comp, crc) = deflate_stream.split_at(deflate_stream.len() - 4);
     
     println!("CRC of uncompressed bytes {}", crc.iter().fold("".to_string(), |st, x| st + &format!("{} ", x) ));
+    let flag_byte = comp.get(1).expect("Deflate stream does not contain flags byte!");
+    //println!("FLAG BYTE {:#010b}", flag_byte);
+    let fdict = 0b1 & (flag_byte >> 5);
+    //println!("FDICT CHECKED {}", fdict);
+    //FLAG BYTE NOT THE PROBLEM.
 
     let mut comp = Bits::new(comp[2..].to_vec(), true);
     let mut out : Vec<u8> = vec![]; 
@@ -23,12 +39,14 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
          
         
         let btype = comp.read_bits(2).expect("Deflate stream header broken - couldn't read block type!");
-        
+       
+        println!("bfinal {bfinal} btype {btype}");
+
         out = match btype {
             0b0 => decode_block_none(&mut comp, out),
             0b01 => decode_block_fixed(&mut comp, out),
             0b10 => decode_block_dynamic(&mut comp, out),
-            _ => return Err("Deflate stream is broken!"),
+            _ => return Err("Deflate stream is broken - read reserved btype!"),
         };
 
 
@@ -36,7 +54,9 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
             break;
         }
     }
-
+    if out == test {
+        println!("Successfully decompressed!");
+    }
     Ok(out)
 }
 
@@ -64,9 +84,11 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
     let order : Vec<u32> = vec![16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
     let mut lengths : Vec<u32> = vec![];
     
-    for _i in 0..code_count {
+    for i in 0..code_count {
         let code_length = comp.read_bits(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
+        println!("{i}: len of {} - {code_length}", order[i as usize]);
         lengths.push(code_length);
+        //lengths.push(code_length.reverse_bits() >> 29);
     }
 
     let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 8];
@@ -85,6 +107,13 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
         //We skip code length 0 when creating the table
         let mut sorted = symbols;
         sorted.sort();
+        
+        /*
+        println!("sorted");
+        for symb in sorted.clone() { 
+            println!("{}", symb);
+        }
+        */
         
         //println!("{}", code_length);
         for symbol in sorted {
@@ -110,20 +139,22 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
     let comp = comp;
     let mut ll_lens_pushed = 0u32;
     //Read ll_count ll code lengths using cl_huff into ll_lengths
+    let mut last_pushed_len = 0u32;
+
     loop {
-        println!("ll_lens_pushed {}", ll_lens_pushed);
+        //println!("ll_lens_pushed {}", ll_lens_pushed);
         if ll_lens_pushed == ll_count {
             break;
         }
 
-        let mut decoded = 0u32;
+        let decoded : u32;
         //Decode one ll length from stream using cl_huff - may cause error due to premature
         //matching caused by u32! 
         let mut current_bits = comp.read_bits(1).expect("Deflate stream broken - couldn't decode ll code length!"); 
         let mut current_length = 1;
         loop {
             let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);
-            println!("{}", &current_bit_string);
+            //println!("num {} is string {}",current_bits, &current_bit_string);
             match cl_huff.get(&current_bit_string) {
                 Some(&x) => {decoded = x; break},
                 None => (),
@@ -132,9 +163,8 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
             current_length += 1;
         }
         
-        let mut last_pushed_len = 0u32;
 
-        println!("{decoded}"); //ERROR HERE!
+        println!("decoded {decoded}"); //ERROR HERE!
 
         match decoded {
             0..=15 => {
@@ -195,19 +225,22 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
 fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     println!("Attempting to decode type 01 block!");
     let mut out = out;
-    let mut current_bits = comp.read_bits(6).expect("Deflate stream is broken  couldn't read first 7 bits!");
    
-    let huff : HashMap<u32, u32> = generate_fixed_huffman(); 
+    let huff : HashMap<String, u32> = generate_fixed_huffman(); 
     let length_table : HashMap<u32, (u32, u32)> = generate_length_table();
     let dist_table : HashMap<u32, (u32, u32)> = generate_dist_table();
 
+    let mut current_bits = 0u32;
+    let mut current_length = 0;
     loop {
         let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
-
         current_bits = (current_bits << 1) + next_bit;
-        
+        current_length += 1;
+
+        let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
+        println!("{current_bit_string}");
         //Causes errors -> premature matching.
-        let code = match huff.get(&current_bits) {
+        let code = match huff.get(&current_bit_string) {
             Some(&x) => x,
             None => continue,
         };
@@ -217,7 +250,8 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         match code {
             x if x < 256 => {
                 out.push(x as u8);
-                current_bits = comp.read_bits(6).expect("Deflate stream is broken - couldn't read bit after pushing literal!");
+                current_bits = 0u32;
+                current_length = 0;
                 continue;
                 },
             256 => break,
@@ -227,7 +261,7 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         //If the loop is still ongoing - decoded is a length - read distance and the read those
         //literals into out
         let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
-          
+        println!("extra bits {extra_len}"); 
         let mut extra = 0u32;
 
         //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
@@ -240,7 +274,7 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         let length = length + extra;
         println!("Added extra bits to length {}", length); 
         //Distance code is not huffman coded. Just a 5 bit code.
-        let mut dist_value = comp.read_bits(5).expect("Deflate stream is broken - couldn't read initial distance bits!"); 
+        let dist_value = comp.read_bits(5).expect("Deflate stream is broken - couldn't read initial distance bits!"); 
         println!("Read distance code from stream {}", dist_value);
         //Now that we have the distance code, use the hash table to read code and extra bits to
         //find real distance value.
@@ -285,7 +319,7 @@ fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     
     for _i in 0..block_len {
         let next_byte = comp.read_bits(8).expect(&format!("Expected {block_len} bytes in stream - but reached end before!"));
-        out.push(next_byte as u8);
+        out.push((next_byte as u8).reverse_bits());
     }
     
     /*
@@ -297,27 +331,29 @@ fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
 
 }
 
-fn generate_fixed_huffman() -> HashMap<u32, u32> {
-    let mut huff : HashMap<u32, u32> = HashMap::new();
+fn generate_fixed_huffman() -> HashMap<String, u32> {
+    let mut huff : HashMap<String, u32> = HashMap::new();
 
     //code length 7
-    let mut code = 0b0000000u32;
+    let mut code = 0u32;
 
     for value in 256..=279u32 { 
-        huff.insert(code, value);
+        let code_string = format!("{:#01$b}", code, 2 + 7);     
+        huff.insert(code_string, value);
         code += 1;
     }
 
     code = code << 1;
-
     //code length 8
     for value in 0..=143u32 {
-        huff.insert(code, value);
+        let code_string = format!("{:#01$b}", code, 2 + 8);
+        huff.insert(code_string, value);
         code += 1;
     }
 
     for value in 280..=287u32 {
-        huff.insert(code, value);
+        let code_string = format!("{:#01$b}", code, 2 + 8);
+        huff.insert(code_string, value);
         code += 1;
     }
 
@@ -325,9 +361,16 @@ fn generate_fixed_huffman() -> HashMap<u32, u32> {
     
     //code length 9
     for value in 144..=255u32 { 
-        huff.insert(code, value);
+        let code_string = format!("{:#01$b}", code, 2 + 9);
+        huff.insert(code_string, value);
         code += 1;
     } 
+    
+    for (key,value) in huff.clone() {
+        if value < 279 && 256 < value{
+            println!("BITS {key} CODE {value} ");
+        }
+    }
 
     huff
 }
@@ -428,14 +471,13 @@ impl Filters {
     pub fn filter(line_num: usize, scanlines: &Vec<Vec<u8>>, bpp: usize) -> Vec<u8>{
         let line = scanlines[line_num].clone();
         let (filter, line) = line.split_at(1);
-
-        match filter[0].reverse_bits() {
+        match filter[0] {
             0 => line.to_vec(),
             1 => Self::sub(line_num, scanlines, bpp),
             2 => Self::up(line_num, scanlines),
             3 => Self::ave(line_num, scanlines, bpp),
             4 => Self::paeth(line_num, scanlines, bpp),
-            _ => vec![]
+            _ => panic!("INVALID FILTER TYPE!")
         }
     }
     
@@ -457,12 +499,12 @@ impl Filters {
             let defiltered_byte = (*filtered_byte) as u32 + match index {
                 _ if index < 3 + channel => 0,
                 _ => {
-                    println!("s {} r {}", index, index - (3 * bpp));
+                    //println!("s {} r {}", index, index - (3 * bpp));
                     out[index-(3*bpp)]},
             } as u32;
-            println!("filt : {filtered_byte}"); 
+            //println!("filt : {filtered_byte}"); 
             let defiltered_byte = (defiltered_byte % 256) as u8;
-            println!("defit: {defiltered_byte}");
+            //println!("defit: {defiltered_byte}");
             out.push(defiltered_byte);
             channel = (channel + 1) % 3
             //out.push(0u8);
@@ -494,70 +536,73 @@ impl Filters {
         println!("ave");
         let mut out = vec![];
         let mut line = Self::get_filterless_line(line_num, scanlines);
+        let mut channel = 0;
 
         for (index, byte) in line.iter().enumerate() {
-            let left : u8 = match index {
-                0 => 0,
-                _ => scanlines[line_num][index-bpp],
-            };
-            let up : u8 = match line_num {
+            let left : u32 = match index {
+                _ if index < 3 + channel => 0,
+                _ => out[index-(3 * bpp)],
+            } as u32;
+            let up : u32 = match line_num {
                 0 => 0,
                 _ => scanlines[line_num - 1][index], 
-            };
+            } as u32;
             //MAY CAUSE ERRORS DUE TO ROUNDING - CONV TO F64:
-            let av : u8 = (left + up ) / 2; 
+            let av = ((left as f64 + up as f64 ) / 2.0).floor(); 
             let defiltered_byte = ((*byte as u32  + av as u32)%256) as u8;
             out.push(defiltered_byte);
+            channel = (channel + 1) % 3
         }
 
         out
     }
 
     fn paeth(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp: usize) -> Vec<u8> {
-        //println!("paeth");
+        println!("paeth");
         let mut out = vec![]; 
-        let mut line = Self::get_filterless_line(line_num, scanlines);
+        let line = Self::get_filterless_line(line_num, scanlines);
         let mut channel = 0;
 
         for (index, byte) in line.iter().enumerate() { 
-            let left : u8 = match index {
+            let left : u32 = match index {
                 _ if index < 3 + channel => 0,
                 _ => out[index-(3*bpp)],
-            };
+            } as u32;
 
-            let up : u8 = match line_num {
-                _ if index < 3 + channel => 0,
+            
+            let up : u32 = match line_num {
+                0 => 0,
                 _ => scanlines[line_num-1][index],
-            };
-
-            let up_left : u8 = match (line_num, index) {
-                (0,_) => 0,
+            } as u32;
+           
+            
+            let up_left : u32 = match (line_num, index) {
+                _ if line_num < 1 => 0,
                 _ if index < 3 + channel => 0,
                 _ => scanlines[line_num-1][index-(3*bpp)],
-            };
+            } as u32;
 
-            let paeth_predictor = |l, u, ul| { 
-                println!("luul {l} {u} {ul}");
-                let p : i32 = l as i32 + u as i32 - ul as i32;
-                let pa = (p - l as i32).abs();
-                let pb = (p - u as i32).abs();
-                let pc = (p - ul as i32).abs();
-                println!("{} {} {}", pa, pb , pc);
-                if pa <= pb && pa <= pc {
-                    return pa as u32;
-                }
-                else if pb <= pc {
-                    return pb as u32;
-                }
-                pc as u32
-            }; 
-            let defiltered_byte = *byte as u32 + (paeth_predictor(left as u32, up as u32, up_left as u32));
+            let defiltered_byte = (*byte) as u32 + (Self::get_paeth_predictor(left as u32, up as u32, up_left as u32));
             out.push((defiltered_byte % 256) as u8);
             //out.push(0u8);
             channel = (channel + 1) % 3;
         }
 
         out
+    }
+
+    fn get_paeth_predictor(left: u32, up: u32, upleft: u32) -> u32 {
+        let inital : i32 = left as i32 + up as i32 - upleft as i32;
+        let pred_left = (inital - left as i32).abs();
+        let pred_up = (inital - up as i32).abs();
+        let pred_upleft = (inital - upleft as i32).abs();
+        if pred_left <= pred_up && pred_left <= pred_upleft {
+            return left as u32;
+        }
+        else if pred_up <= pred_upleft {
+            return up as u32;
+        }
+        upleft as u32
     }
 }
 

@@ -28,7 +28,7 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        let (height, width, depth, color) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth(), encpng.get_color_type());
+        let (height, width, depth, color, il) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth(), encpng.get_color_type(), encpng.get_interlace_type());
         
         let bpp = match (depth / 8) {
             0 => 1,
@@ -36,12 +36,14 @@ impl TryFrom<EncPng> for DecPng {
         } as usize;
 
         println!("PNG DIMENSIONS : width {} height {}", width, height);
+        println!("depth {} bpp {} color {} il {}", depth, bpp, color, il);
 
         let compressed_stream = encpng.get_deflate_stream();
         let decoded_stream = deflate::decompress(compressed_stream)?;
+        println!("{}", decoded_stream.len());
         let defiltered_stream = deflate::defilter(decoded_stream, height, width, bpp)?;
         
-        println!("depth {} bpp {} color {}", depth, bpp, color);
+        println!("depth {} bpp {} color {} il {}", depth, bpp, color, il);
 
         let mut write_string = format!("P3\n{} {}\n {}\n", width, height, 255);
 
