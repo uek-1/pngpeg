@@ -43,10 +43,21 @@ impl TryFrom<EncPng> for DecPng {
         
         println!("depth {} bpp {} color {}", depth, bpp, color);
 
-        let mut write_string = String::from("");
+        let mut write_string = format!("P3\n{} {}\n {}\n", width, height, 255);
 
         let mut char_count = 0;
         for scanline in defiltered_stream {
+
+            /*
+            let skip_take = |obj : &Vec<u8>, skip : usize, n: usize| obj.clone().into_iter().skip(skip * n).take(n);
+
+            let channels : Vec<(u8,u8,u8)> = skip_take(&scanline, 0, 32)
+                                        .zip(skip_take(&scanline, 1, 32))
+                                        .zip(skip_take(&scanline, 2, 32))
+                                        .map(|((x,y), z)| (x,y,z))
+                                        .collect(); 
+            */
+
             for pattern in scanline.chunks(3) {
                 let triple_str = match pattern {
                     &[r,g,b] => format!("{r} {g} {b}  "),

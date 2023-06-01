@@ -411,7 +411,7 @@ pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32, bpp: usize) -
                                                 .chunks(line_size)
                                                 .map(|x| x.to_vec())
                                                 .collect();
-    let mut filtered = scanlines.clone();
+    let mut filtered : Vec<Vec<u8>> = scanlines.clone();
 
     for (index, line) in scanlines.into_iter().enumerate() {
         filtered[index] = Filters::filter(index, &filtered, bpp);
@@ -451,16 +451,21 @@ impl Filters {
         println!("sub");
         let mut out = vec![];
         let mut line = Self::get_filterless_line(line_num, scanlines);
-       
-        for (index, byte) in line.iter().enumerate() {
-            let defiltered_byte = *byte as u32 + match index {
-                0 => 0,
-                _ => scanlines[line_num][index-bpp],
-            } as u32;
-            
-            let defiltered_byte = (defiltered_byte % 255) as u8;
+        let mut channel = 0;
 
+        for (index, filtered_byte) in line.iter().enumerate() {
+            let defiltered_byte = (*filtered_byte) as u32 + match index {
+                _ if index < 3 + channel => 0,
+                _ => {
+                    println!("s {} r {}", index, index - (3 * bpp));
+                    out[index-(3*bpp)]},
+            } as u32;
+            println!("filt : {filtered_byte}"); 
+            let defiltered_byte = (defiltered_byte % 256) as u8;
+            println!("defit: {defiltered_byte}");
             out.push(defiltered_byte);
+            channel = (channel + 1) % 3
+            //out.push(0u8);
         }
 
         out
@@ -477,7 +482,7 @@ impl Filters {
                 _ => scanlines[line_num - 1][index], 
             } as u32;
             
-            let defiltered_byte = (defiltered_byte % 255) as u8;
+            let defiltered_byte = (defiltered_byte % 256) as u8;
 
             out.push(defiltered_byte);
         }
@@ -501,7 +506,7 @@ impl Filters {
             };
             //MAY CAUSE ERRORS DUE TO ROUNDING - CONV TO F64:
             let av : u8 = (left + up ) / 2; 
-            let defiltered_byte = ((*byte as u32  + av as u32)%255) as u8;
+            let defiltered_byte = ((*byte as u32  + av as u32)%256) as u8;
             out.push(defiltered_byte);
         }
 
@@ -512,29 +517,32 @@ impl Filters {
         //println!("paeth");
         let mut out = vec![]; 
         let mut line = Self::get_filterless_line(line_num, scanlines);
+        let mut channel = 0;
 
         for (index, byte) in line.iter().enumerate() { 
             let left : u8 = match index {
-                0 => 0,
-                _ => scanlines[line_num][index-bpp],
+                _ if index < 3 + channel => 0,
+                _ => out[index-(3*bpp)],
             };
 
             let up : u8 = match line_num {
-                0 => 0,
+                _ if index < 3 + channel => 0,
                 _ => scanlines[line_num-1][index],
             };
 
             let up_left : u8 = match (line_num, index) {
                 (0,_) => 0,
-                (_,0) => 0,
-                _ => scanlines[line_num-1][index-bpp],
+                _ if index < 3 + channel => 0,
+                _ => scanlines[line_num-1][index-(3*bpp)],
             };
 
             let paeth_predictor = |l, u, ul| { 
-                let p = l as i32 + u as i32 - ul as i32;
+                println!("luul {l} {u} {ul}");
+                let p : i32 = l as i32 + u as i32 - ul as i32;
                 let pa = (p - l as i32).abs();
                 let pb = (p - u as i32).abs();
                 let pc = (p - ul as i32).abs();
+                println!("{} {} {}", pa, pb , pc);
                 if pa <= pb && pa <= pc {
                     return pa as u32;
                 }
@@ -542,10 +550,11 @@ impl Filters {
                     return pb as u32;
                 }
                 pc as u32
-            };
-            
+            }; 
             let defiltered_byte = *byte as u32 + (paeth_predictor(left as u32, up as u32, up_left as u32));
-            out.push((defiltered_byte % 255) as u8);
+            out.push((defiltered_byte % 256) as u8);
+            //out.push(0u8);
+            channel = (channel + 1) % 3;
         }
 
         out
