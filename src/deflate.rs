@@ -1,18 +1,18 @@
 use crate::bits::Bits;
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 use miniz_oxide::inflate::decompress_to_vec_zlib;
+use std::io::stdout;
 
 pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     //implementation of zlib deflate algorithm
     let test : Vec<u8> = decompress_to_vec_zlib(&deflate_stream).expect("t");
-    /*
+    
     for i in 0..4 {
-        println!("{}",test[i]);
+        println!("literal {i} in real output : {}",test[i]);
     }
-    println!("{}", test.len());
-    */
+    println!("number of decompressed literals {}", test.len());
 
-    return Ok(test);
+    //return Ok(test);
     
     let first_byte = deflate_stream.get(0).expect("Deflate stream is empty!");
     
@@ -33,13 +33,12 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
 
     let mut comp = Bits::new(comp[2..].to_vec(), true);
     let mut out : Vec<u8> = vec![]; 
-
     loop {    
         let bfinal = comp.read_bits(1).expect("Deflate stream header broken - couldn't read block final value!");
          
         
         let btype = comp.read_bits(2).expect("Deflate stream header broken - couldn't read block type!");
-       
+        
         println!("bfinal {bfinal} btype {btype}");
 
         out = match btype {
@@ -234,24 +233,25 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     let mut current_length = 0;
     loop {
         let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
-        current_bits = (current_bits << 1) + next_bit;
+        println!("read bit {next_bit}");
+        comp.print_current_byte();
+        //RFC 1951 page 5
+        current_bits += next_bit << current_length;
         current_length += 1;
-
+        //println!("string len {current_length}");
         let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
         println!("{current_bit_string}");
+        std::io::stdout().flush();
         //Causes errors -> premature matching.
         let code = match huff.get(&current_bit_string) {
-            Some(&x) => x,
+            Some(&x) => {current_bits = 0; current_length = 0; x},
             None => continue,
         };
         
         println!("Found literal or length code {}", code);
-
         match code {
             x if x < 256 => {
                 out.push(x as u8);
-                current_bits = 0u32;
-                current_length = 0;
                 continue;
                 },
             256 => break,
@@ -313,7 +313,7 @@ fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     
     println!("Bytes in block {block_len}");
 
-    if block_len_compl != !block_len {
+    if !block_len_compl << 16 != block_len << 16{
         println!("Complement is invalid!");
     } 
     
@@ -366,11 +366,13 @@ fn generate_fixed_huffman() -> HashMap<String, u32> {
         code += 1;
     } 
     
+    /*
     for (key,value) in huff.clone() {
         if value < 279 && 256 < value{
             println!("BITS {key} CODE {value} ");
         }
     }
+    */
 
     huff
 }

@@ -46,6 +46,12 @@ impl Bits {
         }
     }
 
+    pub fn print_current_byte(&mut self) {
+        let byte_index = (self.position / 8) as usize;
+        println!("pos {} current byte {byte_index} in stream {:#010b}", self.position, self.bytes[byte_index]);
+    }
+
+
     pub fn len(&self) -> u32 {
         let len_i32: i32 = 8 * self.bytes.len() as i32 - self.position as i32;
 
