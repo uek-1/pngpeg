@@ -29,21 +29,38 @@ impl Bits {
 
             let shift = 7 - (i % 8);
             let bit = (byte >> shift) as u32 & 1;
-            value = (value << 1) | bit;
+            value = (value << 1) + bit;
         }
 
         self.position += num;
         Some(value)
     }
 
-    pub fn skip_byte(&mut self)  {
-        let curr_byte_index = (self.position / 8) as usize;
-        loop {
-            self.position += 1;
-            if (self.position / 8 ) as usize == curr_byte_index {
-                break;
-            }
+    pub fn read_bits_reversed(&mut self, num: u32) -> Option<u32> {
+        if num > 32 {
+            return None;
         }
+
+        if self.len() as i32 - (num as i32) < 0 {
+            return None;
+        }
+
+        let mut value = 0u32;
+        for i in self.position..(self.position + num) {
+            let byte_index = (i / 8) as usize;
+            let byte = match self.lsb {
+                false => self.bytes[byte_index],
+                true => self.bytes[byte_index].reverse_bits(),
+            };
+
+            let shift = 7 - (i % 8);
+            let bit = (byte >> shift) as u32 & 1;
+            value = (value << 1) + bit;
+        }
+
+        self.position += num;
+        value = value.reverse_bits() >> (32 - num);
+        Some(value)
     }
 
     pub fn print_current_byte(&mut self) {

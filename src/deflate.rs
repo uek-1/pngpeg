@@ -1,7 +1,6 @@
 use crate::bits::Bits;
-use std::{collections::HashMap, io::Write};
+use std::collections::HashMap;
 use miniz_oxide::inflate::decompress_to_vec_zlib;
-use std::io::stdout;
 
 pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     //implementation of zlib deflate algorithm
@@ -37,7 +36,7 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
         let bfinal = comp.read_bits(1).expect("Deflate stream header broken - couldn't read block final value!");
          
         
-        let btype = comp.read_bits(2).expect("Deflate stream header broken - couldn't read block type!");
+        let btype = comp.read_bits_reversed(2).expect("Deflate stream header broken - couldn't read block type!");
         
         println!("bfinal {bfinal} btype {btype}");
 
@@ -56,24 +55,103 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     if out == test {
         println!("Successfully decompressed!");
     }
+    else {
+        println!("Unsuccessfully decompressed");
+    }
     Ok(out)
 }
 
 fn decode_block_dynamic(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     println!("Attempting to decode type 10 block!");
     let mut out = out;
-    let HLIT = 257 + comp.read_bits(5).expect("Deflate stream is broken - couldn't read HLIT from stream!");
-    let HDIST = 1 + comp.read_bits(5).expect("Deflate stream is broken - couldn't read HDIST from stream!");
-    let HCLEN = 4 + comp.read_bits(4).expect("Deflate stream is broken couldn't read HCLEN from stream!");
+    let HLIT = 257 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HLIT from stream!");
+    let HDIST = 1 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HDIST from stream!");
+    let HCLEN = 4 + comp.read_bits_reversed(4).expect("Deflate stream is broken couldn't read HCLEN from stream!");
     println!("There are {} encoded literals/lengths, {} encoded distances, and {} encoded CL codes", HLIT , HDIST , HCLEN );
 
     let code_length_huff : HashMap<String, u32> = generate_code_length_huff(comp, HCLEN);
-    let ll_huff : HashMap<u32, u32> = generate_dyn_ll_huff(comp, code_length_huff.clone(), HLIT);
-    let dist_huff : HashMap<u32, u32> = generate_dyn_dist_huff(comp, code_length_huff, HDIST);
-
+    let ll_huff : HashMap<String, u32> = generate_dyn_ll_huff(comp, code_length_huff.clone(), HLIT);
+    let dist_huff : HashMap<String, u32> = generate_dyn_dist_huff(comp, code_length_huff, HDIST);
+    let length_table : HashMap<u32, (u32,u32)> = generate_length_table();
+    let dist_table : HashMap<u32, (u32, u32)> = generate_dist_table();
     //call func to decode HLIT literals/lengthss into huffman table.
     //call func to decode HDIST distances
     //Use huffman tables to decode compressed data.
+    let mut current_bits = 0u32;
+    let mut current_length = 0;
+    loop {
+        let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
+        current_bits = (current_bits << 1) + next_bit;
+        current_length += 1;
+        let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
+        let code = match ll_huff.get(&current_bit_string) {
+            Some(&x) => {current_bits = 0; current_length = 0; x},
+            None => continue,
+        };
+        
+        println!("Found literal or length code {}", code);
+        match code {
+            x if x < 256 => {
+                out.push(x as u8);
+                continue;
+                },
+            256 => break,
+            _ => (),
+        };
+        
+        //If the loop is still ongoing - decoded is a length - read distance and the read those
+        //literals into out
+        let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
+        let mut extra = 0u32;
+
+        //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
+        //are read...
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
+        }
+        println!("Decoded length code {} ", length);
+        let length = length + extra;
+        println!("Added extra bits to length {}", length); 
+        //Distance code is huffman coded.
+        //let dist_code = comp.read_bits().expect("Deflate stream is broken - couldn't read initial distance bits!"); 
+        let mut decoded_dist = 0u32;
+        let mut current_dist_bits = 0u32;
+        let mut current_dist_length = 0u32;
+        loop{
+            let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
+            current_dist_bits = (current_dist_bits << 1) + next_bit;
+            current_dist_length += 1;
+            let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
+            match dist_huff.get(&current_bit_string) {
+                Some(&x) => {decoded_dist = x; break},
+                None => continue,
+            };
+        }
+        
+        println!("Read distance code from stream {}", decoded_dist);
+
+        //Now that we have the distance code, use the hash table to read code and extra bits to
+        //find real distance value.
+    
+        let (extra_len, dist) = *dist_table.get(&decoded_dist).expect(&format!("Invalid dynamic huffman code was read for distance ({})", decoded_dist));
+
+        let mut extra = 0u32;
+
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
+        }
+        println!("Found distance from table {}", dist);
+        let dist = dist + extra;
+        println!("Added extra bits to distance {}", dist);
+        
+        println!("Pushing {} literals starting {} backwards onto output buffer of length {}", length, dist, out.len());
+        //Push <length> literals starting from <dist> bytes before.
+        for i in (out.len())..(out.len() + length as usize) {
+            let found_literal = *out.get(i - dist as usize).expect("output buffer was not long enough - attempting to read literals that don't exist");
+            out.push(found_literal);
+        }
+        println!("Output buffer size {}", out.len());
+    }
 
     out
 }
@@ -84,7 +162,7 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
     let mut lengths : Vec<u32> = vec![];
     
     for i in 0..code_count {
-        let code_length = comp.read_bits(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
+        let code_length = comp.read_bits_reversed(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
         println!("{i}: len of {} - {code_length}", order[i as usize]);
         lengths.push(code_length);
         //lengths.push(code_length.reverse_bits() >> 29);
@@ -107,14 +185,6 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
         let mut sorted = symbols;
         sorted.sort();
         
-        /*
-        println!("sorted");
-        for symb in sorted.clone() { 
-            println!("{}", symb);
-        }
-        */
-        
-        //println!("{}", code_length);
         for symbol in sorted {
             let code_string = format!("{:#01$b}", code, code_length + 2); 
             //println!("{}", &code_string);
@@ -129,11 +199,10 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
     }
     println!("");
     
-
     code_length_huff
 }
 
-fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count: u32) -> HashMap<u32, u32> {
+fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count: u32) -> HashMap<String, u32> {
     let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 16];
     let comp = comp;
     let mut ll_lens_pushed = 0u32;
@@ -141,7 +210,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
     let mut last_pushed_len = 0u32;
 
     loop {
-        //println!("ll_lens_pushed {}", ll_lens_pushed);
+        println!("lls : {} / {}", ll_lens_pushed, ll_count);
         if ll_lens_pushed == ll_count {
             break;
         }
@@ -174,14 +243,16 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
             },
             16 => {
                 let ll_len = last_pushed_len;
-                let push_count = 3 + (comp.read_bits(2).expect("err!").reverse_bits() >> 30);
+                let push_count = 3 + comp.read_bits_reversed(2).expect("err!");
+                println!("{push_count} dupes");
                 for i in 0..push_count {
                     lengths_with_symbols[ll_len as usize].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
                 }
             },
             17 => {
-                let zero_count = 3 + (comp.read_bits(3).expect("err!").reverse_bits() >> 29);
+                let zero_count = 3 + comp.read_bits_reversed(3).expect("err!");
+                println!("{zero_count} dupes");
                 for i in 0..zero_count {
                     lengths_with_symbols[0].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
@@ -189,7 +260,8 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
                 last_pushed_len = 0;
             },
             18 =>{
-                let zero_count = 11 + (comp.read_bits(7).expect("err!").reverse_bits() >> 25);
+                let zero_count = 11 + comp.read_bits_reversed(7).expect("err!");               
+                println!("{zero_count} zeros");
                 for i in 0..zero_count {
                     lengths_with_symbols[0].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
@@ -200,25 +272,125 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
         };
     }
 
-    let mut ll_huff : HashMap<u32, u32> = HashMap::new();
+    let mut ll_huff : HashMap<String, u32> = HashMap::new();
     let mut code = 0u32;    
 
-    for ll_length in lengths_with_symbols {
-        let mut sorted = ll_length;
+    for (code_length, symbols) in lengths_with_symbols.into_iter().enumerate().skip(1) { 
+        //We skip code length 0 when creating the table
+        let mut sorted = symbols;
         sorted.sort();
-
+        
         for symbol in sorted {
-            ll_huff.insert(code, symbol);
+            let code_string = format!("{:#01$b}", code, code_length + 2); 
+            //println!("{}", &code_string);
+            ll_huff.insert(code_string, symbol);
             code += 1;
         }
         code = code << 1;
     }
-
+    
+    for (code, symbol) in ll_huff.clone() {
+        println!("{} -> {} ", code, symbol);
+    }
+    println!("");
+    
     ll_huff
 }
 
-fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_count: u32) -> HashMap<u32, u32> {
-    HashMap::new()
+fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_count: u32) -> HashMap<String, u32> {
+    println!("GENERATING DIST HUFF");
+    let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 16];
+    let comp = comp;
+    let mut dist_lens_pushed = 0u32;
+    //Read ll_count ll code lengths using cl_huff into ll_lengths
+    let mut last_pushed_len = 0u32;
+
+    loop {
+        println!("dists : {} / {}", dist_lens_pushed, dist_count);
+        if dist_lens_pushed == dist_count {
+            break;
+        }
+
+        let decoded : u32;
+        //Decode one ll length from stream using cl_huff - may cause error due to premature
+        //matching caused by u32! 
+        let mut current_bits = comp.read_bits(1).expect("Deflate stream broken - couldn't decode ll code length!"); 
+        let mut current_length = 1;
+        loop {
+            let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);
+            //println!("num {} is string {}",current_bits, &current_bit_string);
+            match cl_huff.get(&current_bit_string) {
+                Some(&x) => {decoded = x; break},
+                None => (),
+            }
+            current_bits = (current_bits << 1) + comp.read_bits(1).expect("Deflate stream broken - couldn't decode ll code length!");
+            current_length += 1;
+        }
+        
+
+        println!("decoded {decoded}"); //ERROR HERE!
+
+        match decoded {
+            0..=15 => {
+                let dist_len = decoded;
+                lengths_with_symbols[dist_len as usize].push(dist_lens_pushed);
+                dist_lens_pushed += 1;
+                last_pushed_len = decoded;
+            },
+            16 => {
+                let dist_len = last_pushed_len;
+                let push_count = 3 + comp.read_bits_reversed(2).expect("err!");
+                println!("{push_count} dupes");
+                for _i in 0..push_count {
+                    lengths_with_symbols[dist_len as usize].push(dist_lens_pushed);
+                    dist_lens_pushed += 1;
+                }
+            },
+            17 => {
+                let zero_count = 3 + comp.read_bits_reversed(3).expect("err!");
+                println!("{zero_count} dupes");
+                for _i in 0..zero_count {
+                    lengths_with_symbols[0].push(dist_lens_pushed);
+                    dist_lens_pushed += 1;
+                }
+                last_pushed_len = 0;
+            },
+            18 =>{
+                let zero_count = 11 + comp.read_bits_reversed(7).expect("err!");               
+                println!("{zero_count} zeros");
+                for _i in 0..zero_count {
+                    lengths_with_symbols[0].push(dist_lens_pushed);
+                    dist_lens_pushed += 1;
+                }
+                last_pushed_len = 0;
+            }
+            _ => (),
+        };
+    }
+
+    let mut dist_huff : HashMap<String, u32> = HashMap::new();
+    let mut code = 0u32;    
+
+    for (code_length, symbols) in lengths_with_symbols.into_iter().enumerate().skip(1) { 
+        //We skip code length 0 when creating the table
+        let mut sorted = symbols;
+        sorted.sort();
+        
+        for symbol in sorted {
+            let code_string = format!("{:#01$b}", code, code_length + 2); 
+            println!("{}", &code_string);
+            dist_huff.insert(code_string, symbol);
+            code += 1;
+        }
+        code = code << 1;
+    }
+    
+    for (code, symbol) in dist_huff.clone() {
+        println!("{} -> {} ", code, symbol);
+    }
+    println!("");
+    
+    dist_huff
 }
 
 fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
@@ -233,15 +405,12 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     let mut current_length = 0;
     loop {
         let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
-        println!("read bit {next_bit}");
-        comp.print_current_byte();
+        //comp.print_current_byte();
         //RFC 1951 page 5
-        current_bits += next_bit << current_length;
+        current_bits = (current_bits << 1) + next_bit;
         current_length += 1;
         //println!("string len {current_length}");
         let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
-        println!("{current_bit_string}");
-        std::io::stdout().flush();
         //Causes errors -> premature matching.
         let code = match huff.get(&current_bit_string) {
             Some(&x) => {current_bits = 0; current_length = 0; x},
@@ -261,14 +430,12 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         //If the loop is still ongoing - decoded is a length - read distance and the read those
         //literals into out
         let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
-        println!("extra bits {extra_len}"); 
         let mut extra = 0u32;
 
         //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
         //are read...
         if extra_len != 0 {
-            extra = comp.read_bits(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
-            extra = extra.reverse_bits() >> (32 - extra_len);
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
         }
         println!("Decoded length code {} ", length);
         let length = length + extra;
@@ -284,8 +451,7 @@ fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         let mut extra = 0u32;
 
         if extra_len != 0 {
-            extra = comp.read_bits(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
-            extra = extra.reverse_bits() >> (32 - extra_len); 
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
         }
         println!("Found distance from table {}", dist);
         let dist = dist + extra;
@@ -308,8 +474,8 @@ fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
     let mut out = out;
     //comp.skip_byte();
     comp.read_bits(5);
-    let block_len = comp.read_bits(16).expect("Couldn't read block length from stream").reverse_bits() >> 16; // two bytes in reversed endianness
-    let block_len_compl = comp.read_bits(16).expect("Couldn't read block lenght complement from stream").reverse_bits() >> 16;
+    let block_len = comp.read_bits_reversed(16).expect("Couldn't read block length from stream"); // two bytes in reversed endianness
+    let block_len_compl = comp.read_bits_reversed(16).expect("Couldn't read block lenght complement from stream");
     
     println!("Bytes in block {block_len}");
 
@@ -322,13 +488,7 @@ fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         out.push((next_byte as u8).reverse_bits());
     }
     
-    /*
-    for elem in out.iter() {
-        println!("{}", elem);
-    }
-    */
     out
-
 }
 
 fn generate_fixed_huffman() -> HashMap<String, u32> {
@@ -608,3 +768,36 @@ impl Filters {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn decode_fixed_one_byte() {
+        //0, END
+        let stream : Vec<u8> = vec![0b00110000u8.reverse_bits(), 0u8];
+        let mut comp = Bits::new(stream, true);
+        let out = vec![];
+        let result = decode_block_fixed(&mut comp, out);
+        assert_eq!(result, vec![0]);
+    }
+    
+    #[test]
+    fn decode_fixed_two_byte() {
+        //0, 1, END
+        let stream : Vec<u8> = vec![0b00110000u8.reverse_bits(), 0b00110001u8.reverse_bits(), 0u8];
+        let mut comp = Bits::new(stream, true);
+        let out = vec![];
+        let result = decode_block_fixed(&mut comp, out);
+        assert_eq!(result, vec![0,1]);
+    }
+
+    #[test]
+    fn decode_fixed_bytes_rle() {
+        //0, 0, 3:2, END
+        let stream : Vec<u8> = vec![0b00110000u8.reverse_bits(), 0b00110000u8.reverse_bits(), 0b00000010u8.reverse_bits(), 0b00001000u8, 0u8.reverse_bits()];
+        let mut comp = Bits::new(stream, true);
+        let out = vec![];
+        let result = decode_block_fixed(&mut comp, out);
+        assert_eq!(result, vec![0,0,0,0,0]);
+    }
+}
