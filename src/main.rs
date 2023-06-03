@@ -1,18 +1,11 @@
 use std::fs::File;
 use std::io;
-use std::io::BufReader;
-use std::io::Read;
+use std::io::{BufReader, Read};
 
-mod enc_png;
-use enc_png::EncPng;
-
-mod crc;
-mod dec_png;
-use dec_png::DecPng;
-mod deflate;
+mod png;
+use png::{EncPng, DecPng};
+mod utils;
 mod pixel;
-mod png_chunk;
-mod bits;
 
 struct Cli {
     path: String,
