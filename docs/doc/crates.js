@@ -1,0 +1,1 @@
+window.ALL_CRATES = ["adler","miniz_oxide","pngpeg"];

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PNG_HEADER"],"enum":["ChunkType","Png"],"struct":["DecPng","EncPng","PngChunk","Ppm"]};

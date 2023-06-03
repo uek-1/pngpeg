@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["INIT","POLY","REFIN","REFOUT","XOROUT"],"struct":["Bits","CRC32","Deflate","Filters","Huffman"]};
