@@ -1,4 +1,4 @@
-pngpeg converts .png files to .jpeg files using pure rust. 
+pngpeg converts .png files to .jpeg files
 
 Clone to desired directory.
 Build using "cargo build --release".
