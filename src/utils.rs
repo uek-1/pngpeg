@@ -13,12 +13,12 @@ impl Bits {
     }
 
     pub fn read_bits(&mut self, num: u32) -> Option<u32> {
-        //Clearly I can only pack 32 bits into a u32.
+        //Can only pack 32 bits into a u32.
         if num > 32 {
             return None;
         }
 
-        if self.len() as i32 - (num as i32) < 0 {
+        if self.len() < num {
             return None;
         }
 
@@ -40,37 +40,16 @@ impl Bits {
     }
 
     pub fn read_bits_reversed(&mut self, num: u32) -> Option<u32> {
-        if num > 32 {
-            return None;
+        match self.read_bits(num) {
+            Some(value) => Some(value.reverse_bits() >> (32 - num)),
+            None => None,
         }
-
-        if self.len() as i32 - (num as i32) < 0 {
-            return None;
-        }
-
-        let mut value = 0u32;
-        for i in self.position..(self.position + num) {
-            let byte_index = (i / 8) as usize;
-            let byte = match self.lsb {
-                false => self.bytes[byte_index],
-                true => self.bytes[byte_index].reverse_bits(),
-            };
-
-            let shift = 7 - (i % 8);
-            let bit = (byte >> shift) as u32 & 1;
-            value = (value << 1) + bit;
-        }
-
-        self.position += num;
-        value = value.reverse_bits() >> (32 - num);
-        Some(value)
     }
 
     pub fn print_current_byte(&mut self) {
         let byte_index = (self.position / 8) as usize;
         println!("pos {} current byte {byte_index} in stream {:#010b}", self.position, self.bytes[byte_index]);
     }
-
 
     pub fn len(&self) -> u32 {
         let len_i32: i32 = 8 * self.bytes.len() as i32 - self.position as i32;
@@ -766,6 +745,54 @@ impl Deflate {
         Ok(filtered)
     }
 }
+
+pub struct Huffman {
+    bitmap : HashMap<String, u32>
+}
+
+impl Huffman {
+    pub fn generate_from_length_symbols(lengths_with_symbols: Vec<Vec<u32>>) -> Result<Huffman, &'static str> {
+        if lengths_with_symbols.len() == 0 {
+            return Err("Cannot generate huffman from empty vector!");
+        }
+
+        let mut bitmap : HashMap<String, u32> = HashMap::new();
+        let mut code = 0u32;    
+
+        for (code_length, symbols) in lengths_with_symbols.into_iter().enumerate().skip(1) { 
+            //We skip code length 0 when creating the table
+            let mut sorted = symbols;
+            sorted.sort();
+            
+            for symbol in sorted {
+                let code_string = format!("{:#01$b}", code, code_length + 2); 
+                bitmap.insert(code_string, symbol);
+                code += 1;
+            }
+            code = code << 1;
+        }
+        let huffman = Huffman{bitmap};
+        Ok(huffman)
+    }
+
+    pub fn read_one_code(&self, stream: &mut Bits) -> Result<u32, & 'static str>{
+        let mut bits = 0u32;
+        let mut num_bits = 0usize;
+        loop{
+            let next_bit = stream.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
+            bits = (bits << 1) + next_bit;
+            num_bits += 1;
+            let bit_string = format!("{:#01$b}", bits, 2 + num_bits);     
+            match self.bitmap.get(&bit_string) {
+                Some(&x) => {return Ok(x)},
+                None => continue,
+            };
+        }
+    }
+
+
+}
+
 
 pub struct Filters {
 

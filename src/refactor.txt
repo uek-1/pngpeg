@@ -18,4 +18,14 @@ jpg.encode().write()
 
 should be the flow of main . rs
 
+enum FILETYPE
+  -ENCODED
+  -DECODED
 
+Encoded variants must implement
+  -Readable
+
+Decoded variants must implement
+  -Writeable
+                          (THESE ARE JUST PIXELS + EXTRA INFO)
+png::Encoded::from(file) -> png::Decoded -> jpeg::Decoded -> jpeg::Encoded

@@ -3,12 +3,11 @@ use crate::utils::Deflate;
 use std::fs;
 use crate::utils::CRC32;
 
-
-
 pub enum Png {
     Decoded(DecPng),
     Encoded(EncPng),
 }
+
 
 pub struct PngChunk {
     chunk_length: usize,
@@ -62,10 +61,6 @@ impl PngChunk {
 
     pub fn get_crc(&self) -> [u8; 4] {
         self.chunk_crc
-    }
-
-    pub fn decompress(&mut self) -> Result<(), &'static str> {
-        Err("DECOMPRESSION FAILED!")
     }
 }
 
@@ -153,69 +148,47 @@ impl EncPng {
         println!("{}", deflate_stream.len());
         deflate_stream
     }
-
-    pub fn get_width(&self) -> u32 { 
-        self.chunks
+    
+    fn get_ihdr_info(&self, start: usize, bytes: usize) -> Result<u32, &'static str> {
+        let info : Vec<u8> = self.chunks
             .iter()
             .find(|x| *x.get_type() == ChunkType::IHDR)
-            .unwrap()
+            .expect("IHDR not found!")
             .get_data()
             .clone()
             .into_iter()
-            .take(4)
+            .skip(start)
+            .collect();
+
+        if info.len() < bytes {
+            return Err("Not enough bytes in IHDR to read info from given start");
+        }
+
+        Ok(info
+            .into_iter()
+            .take(bytes)
             .fold(0u32, |width, x| (width << 8) + x as u32)
+        )
+    } 
+
+    pub fn get_width(&self) -> Result<u32, &'static str> { 
+       self.get_ihdr_info(0, 4) 
     }
 
-    pub fn get_height(&self) -> u32 {
-        self.chunks
-            .iter()
-            .find(|x| *x.get_type() == ChunkType::IHDR)
-            .unwrap()
-            .get_data()
-            .clone()
-            .into_iter()
-            .skip(4)
-            .take(4)
-            .fold(0u32, |height, x| (height << 8) + x as u32)
+    pub fn get_height(&self) -> Result<u32, &'static str> {
+        self.get_ihdr_info(4, 4)
     }
 
-    pub fn get_pixel_depth(&self) -> u32 { 
-        self.chunks
-            .iter()
-            .find(|x| *x.get_type() == ChunkType::IHDR)
-            .unwrap()
-            .get_data()
-            .clone()
-            .into_iter()
-            .skip(8)
-            .take(1)
-            .fold(0u32, |depth, x| (depth << 8) + x as u32)
+    pub fn get_pixel_depth(&self) -> Result<u32, &'static str> { 
+        self.get_ihdr_info(8, 1)
     }
 
-    pub fn get_color_type(&self) -> u32 {
-        self.chunks
-            .iter()
-            .find(|x| *x.get_type() == ChunkType::IHDR)
-            .unwrap()
-            .get_data()
-            .clone()
-            .into_iter()
-            .skip(9)
-            .take(1)
-            .fold(0u32, |depth, x| (depth << 8) + x as u32)
+    pub fn get_color_type(&self) -> Result<u32, &'static str> {
+        self.get_ihdr_info(9, 1)
     }
 
-    pub fn get_interlace_type(&self) ->u32 {
-        self.chunks
-            .iter()
-            .find(|x| *x.get_type() == ChunkType::IHDR)
-            .unwrap()
-            .get_data()
-            .clone()
-            .into_iter()
-            .skip(12)
-            .take(1)
-            .fold(0u32, |depth, x| (depth << 8) + x as u32)
+    pub fn get_interlace_type(&self) ->Result<u32 , &'static str>{
+        self.get_ihdr_info(12, 1)
     }
 }
 
@@ -250,7 +223,6 @@ impl TryFrom<Vec<u8>> for EncPng {
 
             //Type of chunk is stored in the 4th-8th bytes of the chunk
             let chunk_type_bytes = &buffer_mut[4..8];
-            let chunk_type_string = String::from_utf8_lossy(chunk_type_bytes);
             let chunk_type = ChunkType::type_from_bytes(chunk_type_bytes.try_into().unwrap());
 
             //Every byte between type and CRC is chunk data
@@ -292,6 +264,7 @@ impl DecPng {
     pub fn set_scanlines(&mut self, scanlines: Vec<Pixels>) {
         self.scanlines = scanlines;
     }
+
 }
 
 impl From<Vec<Pixels>> for DecPng {
@@ -305,7 +278,7 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        let (height, width, depth, color, il) = (encpng.get_height(), encpng.get_width(), encpng.get_pixel_depth(), encpng.get_color_type(), encpng.get_interlace_type());
+        let (height, width, depth, color, il) = (encpng.get_height()?, encpng.get_width()?, encpng.get_pixel_depth()?, encpng.get_color_type()?, encpng.get_interlace_type()?);
         
         let bpp = match depth / 8 {
             0 => 1,
@@ -322,21 +295,22 @@ impl TryFrom<EncPng> for DecPng {
         
         println!("depth {} bpp {} color {} il {}", depth, bpp, color, il);
 
+        Ppm::write_to_p3(width, height, String::from("out.ppm"), defiltered_stream)?;
+
+        Ok(DecPng::new())
+    }
+}
+
+pub struct Ppm {
+
+}
+
+impl Ppm {
+    pub fn write_to_p3(width:u32, height:u32, path: String, scanlines: Vec<Vec<u8>>) -> Result<(), &'static str> {
         let mut write_string = format!("P3\n{} {}\n {}\n", width, height, 255);
 
         let mut char_count = 0;
-        for scanline in defiltered_stream {
-
-            /*
-            let skip_take = |obj : &Vec<u8>, skip : usize, n: usize| obj.clone().into_iter().skip(skip * n).take(n);
-
-            let channels : Vec<(u8,u8,u8)> = skip_take(&scanline, 0, 32)
-                                        .zip(skip_take(&scanline, 1, 32))
-                                        .zip(skip_take(&scanline, 2, 32))
-                                        .map(|((x,y), z)| (x,y,z))
-                                        .collect(); 
-            */
-
+        for scanline in scanlines {
             for pattern in scanline.chunks(3) {
                 let triple_str = match pattern {
                     &[r,g,b] => format!("{r} {g} {b}  "),
@@ -356,12 +330,7 @@ impl TryFrom<EncPng> for DecPng {
             write_string.push_str("\n");
         }
         
-        fs::write("out.ppm", write_string).expect("Unable to write file");
-
-        Ok(DecPng::new())
+        fs::write(&path, write_string).expect("Unable to write file");
+        Ok(())
     }
 }
-
-
-
-
