@@ -1,19 +1,46 @@
+//! Utility algorthims and functions used while encoding or decoding
+
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use std::collections::HashMap;
 
+/// Bits 
+///
+/// This struct is used to create bitstreams from a vector of bytes.
 pub struct Bits {
+    
+    /// The bytes this stream is reading from
     bytes: Vec<u8>,
+
+    /// Inner value used to record the next bit that will be read out. Note this value starts at 0.
     position: u32,
+
+    /// Boolean value that represents the order which the bits are read - true for
+    /// least-significant-bit (lsb) and false for most-significant-bit (msb).
+    ///
+    /// Consider a byte, 0b11110000. 
+    /// If this byte is read LSB first, it would be read 00001111. If it were read MSB first, it
+    /// would be read 11110000.
     lsb: bool,
 }
 
 impl Bits {
+    
+    /// Static method to initialize a new bitstream from "bytes" and read least-significant-bit
+    /// first if lsb is set to true. 
     pub fn new(bytes: Vec<u8>, lsb: bool) -> Bits {
         Bits { bytes, position: 0 , lsb}
     }
-
+    
+    /// Method to read the next num bits in the stream - returns None if num is greater than the
+    /// remaining length.
+    ///
+    /// Bits are returned as a u32, so there will be extra 0s if less than 32 bits are read. The
+    /// output u32 has the last bit read on the rightmost position and the first bit read on the
+    /// leftmost position. 
+    ///
+    /// Example: reading 3 bits from 01101111 MSB first would produce the u32 - 0b11. 
     pub fn read_bits(&mut self, num: u32) -> Option<u32> {
-        //Can only pack 32 bits into a u32.
+        // Can only pack 32 bits into a u32.
         if num > 32 {
             return None;
         }
@@ -25,11 +52,16 @@ impl Bits {
         let mut value = 0u32;
         for i in self.position..(self.position + num) {
             let byte_index = (i / 8) as usize;
+            
+            // When read LSB first, the rightmost bit is the first (highest value) bit - so the
+            // byte is essentially read in reverse.
             let byte = match self.lsb {
                 false => self.bytes[byte_index],
                 true => self.bytes[byte_index].reverse_bits(),
             };
 
+            // The nth bit is the (n % 8)th bit of the (n div 8)th byte. To read it, we shift it to
+            // the rightmost bit position and bitwise AND it with 00000....1. 
             let shift = 7 - (i % 8);
             let bit = (byte >> shift) as u32 & 1;
             value = (value << 1) + bit;
@@ -39,6 +71,13 @@ impl Bits {
         Some(value)
     }
 
+    /// This method reads n bits just like read_bits() but reverses the output u32 after being
+    /// completely calculated. 
+    ///
+    /// This method is used in cases where some data elements in the stream are packed in different
+    /// endianness (MSB or LSB). 
+    ///
+    /// Example, reading 3 bits MSB first from 01101111 MSB first would produce the u32 - 0b110
     pub fn read_bits_reversed(&mut self, num: u32) -> Option<u32> {
         match self.read_bits(num) {
             Some(value) => Some(value.reverse_bits() >> (32 - num)),
@@ -46,12 +85,16 @@ impl Bits {
         }
     }
 
+    /// Method used to debug functionality - simply prints the entire byte which the next bit will
+    /// be read from.
     pub fn print_current_byte(&mut self) {
         let byte_index = (self.position / 8) as usize;
         println!("pos {} current byte {byte_index} in stream {:#010b}", self.position, self.bytes[byte_index]);
     }
-
+    
+    /// Returns the remaining bits in the stream.
     pub fn len(&self) -> u32 {
+        // Subtract read bits from total bits.
         let len_i32: i32 = 8 * self.bytes.len() as i32 - self.position as i32;
 
         match len_i32 < 0 {
@@ -61,23 +104,29 @@ impl Bits {
     }
 }
 
+/// Container struct to make code more readable and prevent namespace conflicts. Contains various
+/// CRC algorithms 
 pub struct CRC32{
 
 }
 
 impl CRC32 {
+    /// Implementation of the CRC-32 algorithm used in PNG files. The specification is  
+    /// POLY: 0x04C11DB7, XOROUT: 0xFFFFFFFF, INIT: 0xFFFFFFFF, REFIN: true, REFOUT: true. 
     pub fn png_crc(bytes: Vec<u8>) -> Result<[u8; 4], &'static str> {
         const POLY: u32 = 0x04C11DB7;
         const XOROUT: u32 = 0xFFFFFFFF;
         const INIT: u32 = 0xFFFFFFFF;
         const REFIN: bool = true;
         const REFOUT: bool = true;
-
+        
+        // A 32 bit CRC is padded with 32 bits on the right.
         let mut padding = vec![0u8; 4];
         let mut padded_bytes = bytes;
         padded_bytes.append(&mut padding);
         let mut padded_bits = Bits::new(padded_bytes, REFIN);
-
+        
+        // Read 32 bits into the register to begin, because our polynomial has 32 explicit bits
         let mut register = match padded_bits.read_bits(32) {
             Some(x) => x,
             None => return Err("Error while reading initial 32 bits into register. It's likely that the padding failed."),
@@ -87,6 +136,7 @@ impl CRC32 {
         register ^= INIT;
 
         while let Some(next_bit) = padded_bits.read_bits(1) {
+            // Pop one bit from the left, if it is a one XOR the register with poly. 
             let popped_bit = register >> 31;
             register = (register << 1) + next_bit;
 
@@ -95,6 +145,7 @@ impl CRC32 {
                 _ => register ^= POLY,
             };
         }
+
         if REFOUT {
             register = register.reverse_bits();
         }
@@ -105,15 +156,27 @@ impl CRC32 {
     }
 }
 
+
+/// Struct that contains methods to decompress DEFLATE streams.
+///
+/// There are only two primary function that should be used here - decompress() and defilter().
+/// Everything else here is a component of either of those two functions
 pub struct Deflate {
 
 }
 
 impl Deflate {
+
+    /// Takes in a compressed stream of bytes and returns a decompressed stream of bytes.
+    ///
+    /// This method will error if the input stream does not meet the specification outlined in RFC
+    /// 1950 and 1951. Note that this method requires the input stream to be encoded in ZLIB
+    /// format.
     pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        //implementation of zlib deflate algorithm
+        // Use library to decompress stream for debugging reasons (TODO: REMOVE THIS!)
         let test : Vec<u8> = decompress_to_vec_zlib(&deflate_stream).expect("t");
-        
+
+        // This block may error if the decompressed stream does not have 4 bytes. 
         for i in 0..4 {
             println!("literal {i} in real output : {}",test[i]);
         }
@@ -137,10 +200,16 @@ impl Deflate {
 
         //TODO: FDICT FUNCTIONALITY
         let _fdict = 0b1 & (flag_byte >> 5);
-
+        
+        // comp is the compressed bitstream and out is the vector in which decompressed bytes will
+        // be stored.
         let mut comp = Bits::new(comp[2..].to_vec(), true);
         let mut out : Vec<u8> = vec![]; 
         loop {    
+            // DEFLATE streams consist of multiple blocks of compressed bits each using one of
+            // three outlined compression methods. For each block, three bits are read which indicate 
+            // the compression type and whether the block is the final one in the stream. Then the
+            // block is decompressed using one of three methods and output into out
             let bfinal = comp.read_bits(1).expect("Deflate stream header broken - couldn't read block final value!");
             let btype = comp.read_bits_reversed(2).expect("Deflate stream header broken - couldn't read block type!");
             
@@ -157,7 +226,9 @@ impl Deflate {
                 break;
             }
         }
-
+        
+        // This block exists for debugging purposes - compares the result to one generated by the deflate
+        // decompressor in the crate "miniz_oxide" and panics if they are not equal. 
         if out == test {
             println!("Successfully decompressed!");
         }
