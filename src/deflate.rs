@@ -57,6 +57,11 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     }
     else {
         println!("Unsuccessfully decompressed");
+        
+        let dub = out.iter().zip(test.iter());
+        dub.filter(|(x,y)| x != y).for_each(|(x,y)| println!("Differs: {x} != {y}"));
+
+        panic!();
     }
     Ok(out)
 }
@@ -114,14 +119,14 @@ fn decode_block_dynamic(comp: &mut Bits, out : Vec<u8>) -> Vec<u8> {
         println!("Added extra bits to length {}", length); 
         //Distance code is huffman coded.
         //let dist_code = comp.read_bits().expect("Deflate stream is broken - couldn't read initial distance bits!"); 
-        let mut decoded_dist = 0u32;
+        let decoded_dist : u32;
         let mut current_dist_bits = 0u32;
-        let mut current_dist_length = 0u32;
+        let mut current_dist_length = 0usize;
         loop{
             let next_bit = comp.read_bits(1).expect("Deflate stream is broken - trying to read out of bounds!");
             current_dist_bits = (current_dist_bits << 1) + next_bit;
             current_dist_length += 1;
-            let current_bit_string = format!("{:#01$b}", current_bits, 2 + current_length);     
+            let current_bit_string = format!("{:#01$b}", current_dist_bits, 2 + current_dist_length);     
             match dist_huff.get(&current_bit_string) {
                 Some(&x) => {decoded_dist = x; break},
                 None => continue,
@@ -163,7 +168,7 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
     
     for i in 0..code_count {
         let code_length = comp.read_bits_reversed(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
-        println!("{i}: len of {} - {code_length}", order[i as usize]);
+        //println!("{i}: len of {} - {code_length}", order[i as usize]);
         lengths.push(code_length);
         //lengths.push(code_length.reverse_bits() >> 29);
     }
@@ -193,12 +198,12 @@ fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> HashMap<String
         }
         code = code << 1;
     }
-    
+    /* 
     for (code, symbol) in code_length_huff.clone() {
         println!("{} -> {} ", code, symbol);
     }
     println!("");
-    
+    */
     code_length_huff
 }
 
@@ -210,7 +215,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
     let mut last_pushed_len = 0u32;
 
     loop {
-        println!("lls : {} / {}", ll_lens_pushed, ll_count);
+        //println!("lls : {} / {}", ll_lens_pushed, ll_count);
         if ll_lens_pushed == ll_count {
             break;
         }
@@ -232,7 +237,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
         }
         
 
-        println!("decoded {decoded}"); //ERROR HERE!
+        //println!("decoded {decoded}"); 
 
         match decoded {
             0..=15 => {
@@ -244,7 +249,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
             16 => {
                 let ll_len = last_pushed_len;
                 let push_count = 3 + comp.read_bits_reversed(2).expect("err!");
-                println!("{push_count} dupes");
+                //println!("{push_count} dupes");
                 for i in 0..push_count {
                     lengths_with_symbols[ll_len as usize].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
@@ -252,7 +257,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
             },
             17 => {
                 let zero_count = 3 + comp.read_bits_reversed(3).expect("err!");
-                println!("{zero_count} dupes");
+                //println!("{zero_count} dupes");
                 for i in 0..zero_count {
                     lengths_with_symbols[0].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
@@ -261,7 +266,7 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
             },
             18 =>{
                 let zero_count = 11 + comp.read_bits_reversed(7).expect("err!");               
-                println!("{zero_count} zeros");
+                //println!("{zero_count} zeros");
                 for i in 0..zero_count {
                     lengths_with_symbols[0].push(ll_lens_pushed);
                     ll_lens_pushed += 1;
@@ -288,11 +293,14 @@ fn generate_dyn_ll_huff(comp: &mut Bits, cl_huff: HashMap<String,u32>, ll_count:
         }
         code = code << 1;
     }
+
+    
     
     for (code, symbol) in ll_huff.clone() {
         println!("{} -> {} ", code, symbol);
     }
     println!("");
+    
     
     ll_huff
 }
@@ -306,7 +314,7 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
     let mut last_pushed_len = 0u32;
 
     loop {
-        println!("dists : {} / {}", dist_lens_pushed, dist_count);
+        //println!("dists : {} / {}", dist_lens_pushed, dist_count);
         if dist_lens_pushed == dist_count {
             break;
         }
@@ -328,7 +336,7 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
         }
         
 
-        println!("decoded {decoded}"); //ERROR HERE!
+        //println!("decoded {decoded}"); //ERROR HERE!
 
         match decoded {
             0..=15 => {
@@ -340,7 +348,7 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
             16 => {
                 let dist_len = last_pushed_len;
                 let push_count = 3 + comp.read_bits_reversed(2).expect("err!");
-                println!("{push_count} dupes");
+                //println!("{push_count} dupes");
                 for _i in 0..push_count {
                     lengths_with_symbols[dist_len as usize].push(dist_lens_pushed);
                     dist_lens_pushed += 1;
@@ -348,7 +356,7 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
             },
             17 => {
                 let zero_count = 3 + comp.read_bits_reversed(3).expect("err!");
-                println!("{zero_count} dupes");
+                //println!("{zero_count} dupes");
                 for _i in 0..zero_count {
                     lengths_with_symbols[0].push(dist_lens_pushed);
                     dist_lens_pushed += 1;
@@ -357,7 +365,7 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
             },
             18 =>{
                 let zero_count = 11 + comp.read_bits_reversed(7).expect("err!");               
-                println!("{zero_count} zeros");
+                //println!("{zero_count} zeros");
                 for _i in 0..zero_count {
                     lengths_with_symbols[0].push(dist_lens_pushed);
                     dist_lens_pushed += 1;
@@ -378,18 +386,18 @@ fn generate_dyn_dist_huff(comp: &mut Bits, cl_huff: HashMap<String ,u32>, dist_c
         
         for symbol in sorted {
             let code_string = format!("{:#01$b}", code, code_length + 2); 
-            println!("{}", &code_string);
+            //println!("{}", &code_string);
             dist_huff.insert(code_string, symbol);
             code += 1;
         }
         code = code << 1;
     }
-    
+    /* 
     for (code, symbol) in dist_huff.clone() {
         println!("{} -> {} ", code, symbol);
     }
     println!("");
-    
+    */
     dist_huff
 }
 
@@ -565,7 +573,8 @@ fn generate_length_table() -> HashMap<u32, (u32,u32)> {
                                                                 (280, (4,115)),
                                                                 (281, (5,131)),
                                                                 (282, (5,163)),
-                                                                (283, (5,227)),
+                                                                (283, (5,195)),
+                                                                (284, (5,225)),
                                                                 (285, (0,258))
     ]);
 
@@ -792,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_fixed_bytes_rle() {
+    fn decode_fixed_bytes_backref() {
         //0, 0, 3:2, END
         let stream : Vec<u8> = vec![0b00110000u8.reverse_bits(), 0b00110000u8.reverse_bits(), 0b00000010u8.reverse_bits(), 0b00001000u8, 0u8.reverse_bits()];
         let mut comp = Bits::new(stream, true);
@@ -800,4 +809,15 @@ mod tests {
         let result = decode_block_fixed(&mut comp, out);
         assert_eq!(result, vec![0,0,0,0,0]);
     }
+    
+    #[test]
+    fn decode_fixed_bytes_rle() {
+        //0, 5:1
+        let stream : Vec<u8> = vec![0b00110000u8.reverse_bits(),0b00000010u8.reverse_bits(), 0b00000000u8, 0u8.reverse_bits()];
+        let mut comp = Bits::new(stream, true);
+        let out = vec![];
+        let result = decode_block_fixed(&mut comp, out);
+        assert_eq!(result, vec![0,0,0,0]);
+    }
+
 }
