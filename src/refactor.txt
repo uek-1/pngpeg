@@ -1,0 +1,21 @@
+move crc, deflate, bits to utils
+deflate ::
+  create Huffman class
+    -> HuffmanReadOne(stream) -> u32
+  create Deflate class
+    -> Remove reduntant code using Huffmans
+  make Filter general
+
+  make toPixels() func
+
+combine enc_png, dec_png , and png_chunk into one file.
+
+pixels = png.decompress().defilter().to_pixels()
+
+let jpg = jpeg::from(pixels)
+
+jpg.encode().write()
+
+should be the flow of main . rs
+
+
