@@ -104,526 +104,513 @@ impl Bits {
     }
 }
 
-/// Container struct to make code more readable and prevent namespace conflicts. Contains various
-/// CRC algorithms 
-pub struct CRC32{
+/// Implementation of the CRC-32 algorithm used in PNG files. The specification is  
+/// POLY: 0x04C11DB7, XOROUT: 0xFFFFFFFF, INIT: 0xFFFFFFFF, REFIN: true, REFOUT: true. 
+pub fn png_crc(bytes: Vec<u8>) -> Result<[u8; 4], &'static str> {
+    const POLY: u32 = 0x04C11DB7;
+    const XOROUT: u32 = 0xFFFFFFFF;
+    const INIT: u32 = 0xFFFFFFFF;
+    const REFIN: bool = true;
+    const REFOUT: bool = true;
+    
+    // A 32 bit CRC is padded with 32 bits on the right.
+    let mut padding = vec![0u8; 4];
+    let mut padded_bytes = bytes;
+    padded_bytes.append(&mut padding);
+    let mut padded_bits = Bits::new(padded_bytes, REFIN);
+    
+    // Read 32 bits into the register to begin, because our polynomial has 32 explicit bits
+    let mut register = match padded_bits.read_bits(32) {
+        Some(x) => x,
+        None => return Err("Error while reading initial 32 bits into register. It's likely that the padding failed."),
+    };
 
-}
+    //INIT value - see https://stackoverflow.com/questions/43823923/implementation-of-crc-8-what-does-the-init-parameter-do:
+    register ^= INIT;
 
-impl CRC32 {
-    /// Implementation of the CRC-32 algorithm used in PNG files. The specification is  
-    /// POLY: 0x04C11DB7, XOROUT: 0xFFFFFFFF, INIT: 0xFFFFFFFF, REFIN: true, REFOUT: true. 
-    pub fn png_crc(bytes: Vec<u8>) -> Result<[u8; 4], &'static str> {
-        const POLY: u32 = 0x04C11DB7;
-        const XOROUT: u32 = 0xFFFFFFFF;
-        const INIT: u32 = 0xFFFFFFFF;
-        const REFIN: bool = true;
-        const REFOUT: bool = true;
-        
-        // A 32 bit CRC is padded with 32 bits on the right.
-        let mut padding = vec![0u8; 4];
-        let mut padded_bytes = bytes;
-        padded_bytes.append(&mut padding);
-        let mut padded_bits = Bits::new(padded_bytes, REFIN);
-        
-        // Read 32 bits into the register to begin, because our polynomial has 32 explicit bits
-        let mut register = match padded_bits.read_bits(32) {
-            Some(x) => x,
-            None => return Err("Error while reading initial 32 bits into register. It's likely that the padding failed."),
+    while let Some(next_bit) = padded_bits.read_bits(1) {
+        // Pop one bit from the left, if it is a one XOR the register with poly. 
+        let popped_bit = register >> 31;
+        register = (register << 1) + next_bit;
+
+        match popped_bit {
+            0 => (),
+            _ => register ^= POLY,
         };
-
-        //INIT value - see https://stackoverflow.com/questions/43823923/implementation-of-crc-8-what-does-the-init-parameter-do:
-        register ^= INIT;
-
-        while let Some(next_bit) = padded_bits.read_bits(1) {
-            // Pop one bit from the left, if it is a one XOR the register with poly. 
-            let popped_bit = register >> 31;
-            register = (register << 1) + next_bit;
-
-            match popped_bit {
-                0 => (),
-                _ => register ^= POLY,
-            };
-        }
-
-        if REFOUT {
-            register = register.reverse_bits();
-        }
-
-        register ^= XOROUT;
-
-        Ok(register.to_be_bytes())
     }
+
+    if REFOUT {
+        register = register.reverse_bits();
+    }
+
+    register ^= XOROUT;
+
+    Ok(register.to_be_bytes())
 }
 
 
-/// Struct that contains methods to decompress DEFLATE streams.
+
+/// Takes in a compressed stream of bytes and returns a decompressed stream of bytes.
 ///
-/// There are only two primary function that should be used here - decompress() and defilter().
-/// Everything else here is a component of either of those two functions
-pub struct Deflate {
+/// This method will error if the input stream does not meet the specification outlined in RFC
+/// 1950 and 1951. Note that this method requires the input stream to be encoded in ZLIB
+/// format.
+pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    // Use library to decompress stream for debugging reasons (TODO: REMOVE THIS!)
+    let test : Vec<u8> = decompress_to_vec_zlib(&deflate_stream).expect("t");
 
+    // This block may error if the decompressed stream does not have 4 bytes. 
+    for i in 0..4 {
+        println!("literal {i} in real output : {}",test[i]);
+    }
+    println!("number of decompressed literals {}", test.len());
+
+    let first_byte = match deflate_stream.get(0) {
+        Some(x) => x,
+        None => return Err("Deflate stream was empty!"),
+    };
+    
+    let cmf = first_byte & 0x0fu8;
+    let window_size = 2_u32.pow(((first_byte >> 4) + 8) as u32); 
+    
+    println!("Compression method (cmf): {cmf}");
+    println!("Compression window: {window_size}");
+
+    let (comp, crc) = deflate_stream.split_at(deflate_stream.len() - 4);
+    
+    println!("CRC of uncompressed bytes {}", crc.iter().fold("".to_string(), |st, x| st + &format!("{} ", x) ));
+    let flag_byte = comp.get(1).expect("Deflate stream does not contain flags byte!");
+
+    //TODO: FDICT FUNCTIONALITY
+    let _fdict = 0b1 & (flag_byte >> 5);
+    
+    // comp is the compressed bitstream and out is the vector in which decompressed bytes will
+    // be stored.
+    let mut comp = Bits::new(comp[2..].to_vec(), true);
+    let mut out : Vec<u8> = vec![]; 
+    loop {    
+        // DEFLATE streams consist of multiple blocks of compressed bits each using one of
+        // three outlined compression methods. For each block, three bits are read which indicate 
+        // the compression type and whether the block is the final one in the stream. Then the
+        // block is decompressed using one of three methods and output into out
+        let bfinal = comp.read_bits(1).expect("Deflate stream header broken - couldn't read block final value!");
+        let btype = comp.read_bits_reversed(2).expect("Deflate stream header broken - couldn't read block type!");
+        
+        println!("bfinal {bfinal} btype {btype}");
+
+        out = match btype {
+            0b0 => decode_block_none(&mut comp, out)?,
+            0b01 => decode_block_fixed(&mut comp, out)?,
+            0b10 => decode_block_dynamic(&mut comp, out)?,
+            _ => return Err("Deflate stream is broken - read reserved btype!"),
+        };
+
+        if bfinal == 1 { 
+            break;
+        }
+    }
+    
+    // This block exists for debugging purposes - compares the result to one generated by the deflate
+    // decompressor in the crate "miniz_oxide" and panics if they are not equal. 
+    if out == test {
+        println!("Successfully decompressed!");
+    }
+    else {
+        println!("Unsuccessfully decompressed");
+        
+        let dub = out.iter().zip(test.iter());
+        dub.filter(|(x,y)| x != y).for_each(|(x,y)| println!("Differs: {x} != {y}"));
+
+        panic!();
+    }
+
+    Ok(out)
 }
 
-impl Deflate {
+fn decode_block_dynamic(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    println!("Attempting to decode type 10 block!");
+    let mut out = out;
+    let literal_length_code_count = 257 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HLIT from stream!");
+    let distance_code_count = 1 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HDIST from stream!");
+    let code_length_code_length_count = 4 + comp.read_bits_reversed(4).expect("Deflate stream is broken couldn't read HCLEN from stream!");
 
-    /// Takes in a compressed stream of bytes and returns a decompressed stream of bytes.
-    ///
-    /// This method will error if the input stream does not meet the specification outlined in RFC
-    /// 1950 and 1951. Note that this method requires the input stream to be encoded in ZLIB
-    /// format.
-    pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        // Use library to decompress stream for debugging reasons (TODO: REMOVE THIS!)
-        let test : Vec<u8> = decompress_to_vec_zlib(&deflate_stream).expect("t");
+    println!("There are {} encoded literals/lengths, {} encoded distances, and {} encoded CL codes", literal_length_code_count , distance_code_count , code_length_code_length_count );
 
-        // This block may error if the decompressed stream does not have 4 bytes. 
-        for i in 0..4 {
-            println!("literal {i} in real output : {}",test[i]);
-        }
-        println!("number of decompressed literals {}", test.len());
+    let code_length_huff : Huffman = generate_code_length_huff(comp, code_length_code_length_count);
+    let ll_huff : Huffman = generate_dyn_huff(comp, code_length_huff.clone(), literal_length_code_count);
+    let dist_huff : Huffman = generate_dyn_huff(comp, code_length_huff, distance_code_count);
 
-        let first_byte = match deflate_stream.get(0) {
-            Some(x) => x,
-            None => return Err("Deflate stream was empty!"),
-        };
-        
-        let cmf = first_byte & 0x0fu8;
-        let window_size = 2_u32.pow(((first_byte >> 4) + 8) as u32); 
-        
-        println!("Compression method (cmf): {cmf}");
-        println!("Compression window: {window_size}");
+    let length_table : HashMap<u32, (u32,u32)> = generate_length_table();
+    let dist_table : HashMap<u32, (u32, u32)> = generate_dist_table();
 
-        let (comp, crc) = deflate_stream.split_at(deflate_stream.len() - 4);
-        
-        println!("CRC of uncompressed bytes {}", crc.iter().fold("".to_string(), |st, x| st + &format!("{} ", x) ));
-        let flag_byte = comp.get(1).expect("Deflate stream does not contain flags byte!");
-
-        //TODO: FDICT FUNCTIONALITY
-        let _fdict = 0b1 & (flag_byte >> 5);
-        
-        // comp is the compressed bitstream and out is the vector in which decompressed bytes will
-        // be stored.
-        let mut comp = Bits::new(comp[2..].to_vec(), true);
-        let mut out : Vec<u8> = vec![]; 
-        loop {    
-            // DEFLATE streams consist of multiple blocks of compressed bits each using one of
-            // three outlined compression methods. For each block, three bits are read which indicate 
-            // the compression type and whether the block is the final one in the stream. Then the
-            // block is decompressed using one of three methods and output into out
-            let bfinal = comp.read_bits(1).expect("Deflate stream header broken - couldn't read block final value!");
-            let btype = comp.read_bits_reversed(2).expect("Deflate stream header broken - couldn't read block type!");
-            
-            println!("bfinal {bfinal} btype {btype}");
-
-            out = match btype {
-                0b0 => Self::decode_block_none(&mut comp, out)?,
-                0b01 => Self::decode_block_fixed(&mut comp, out)?,
-                0b10 => Self::decode_block_dynamic(&mut comp, out)?,
-                _ => return Err("Deflate stream is broken - read reserved btype!"),
-            };
-
-            if bfinal == 1 { 
-                break;
-            }
-        }
-        
-        // This block exists for debugging purposes - compares the result to one generated by the deflate
-        // decompressor in the crate "miniz_oxide" and panics if they are not equal. 
-        if out == test {
-            println!("Successfully decompressed!");
-        }
-        else {
-            println!("Unsuccessfully decompressed");
-            
-            let dub = out.iter().zip(test.iter());
-            dub.filter(|(x,y)| x != y).for_each(|(x,y)| println!("Differs: {x} != {y}"));
-
-            panic!();
-        }
-
-        Ok(out)
-    }
-
-    fn decode_block_dynamic(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        println!("Attempting to decode type 10 block!");
-        let mut out = out;
-        let literal_length_code_count = 257 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HLIT from stream!");
-        let distance_code_count = 1 + comp.read_bits_reversed(5).expect("Deflate stream is broken - couldn't read HDIST from stream!");
-        let code_length_code_length_count = 4 + comp.read_bits_reversed(4).expect("Deflate stream is broken couldn't read HCLEN from stream!");
-
-        println!("There are {} encoded literals/lengths, {} encoded distances, and {} encoded CL codes", literal_length_code_count , distance_code_count , code_length_code_length_count );
-
-        let code_length_huff : Huffman = Self::generate_code_length_huff(comp, code_length_code_length_count);
-        let ll_huff : Huffman = Self::generate_dyn_huff(comp, code_length_huff.clone(), literal_length_code_count);
-        let dist_huff : Huffman = Self::generate_dyn_huff(comp, code_length_huff, distance_code_count);
-
-        let length_table : HashMap<u32, (u32,u32)> = Self::generate_length_table();
-        let dist_table : HashMap<u32, (u32, u32)> = Self::generate_dist_table();
-
-        loop {
-            let code : u32 = ll_huff.read_one_code(comp).expect("Couldn't read next length or literal code!");
-            println!("Found literal or length code {}", code);
-
-            match code {
-                x if x < 256 => {
-                    out.push(x as u8);
-                    continue;
-                    },
-                256 => break,
-                _ => (),
-            };
-            
-            //If the loop is still ongoing - decoded is a length - read distance and the read those
-            //literals into out
-
-            let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
-
-            println!("Decoded length code {} ", length);
-            //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
-            //are read...
-            let mut extra = 0u32;
-            if extra_len != 0 {
-                extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
-            }
-            let length = length + extra;
-            println!("Added extra bits to length {}", length); 
-            //Distance code is huffman coded.
-            //let dist_code = comp.read_bits().expect("Deflate stream is broken - couldn't read initial distance bits!"); 
-            let decoded_dist : u32 = dist_huff.read_one_code(comp).expect("Couldn't read next distance code");
-            
-            println!("Read distance code from stream {}", decoded_dist);
-
-            //Now that we have the distance code, use the hash table to read code and extra bits to
-            //find real distance value.
-        
-            let (extra_len, dist) = *dist_table.get(&decoded_dist).expect(&format!("Invalid dynamic huffman code was read for distance ({})", decoded_dist));
-
-            let mut extra = 0u32;
-
-            if extra_len != 0 {
-                extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
-            }
-            println!("Found distance from table {}", dist);
-            let dist = dist + extra;
-            println!("Added extra bits to distance {}", dist);
-            
-            println!("Pushing {} literals starting {} backwards onto output buffer of length {}", length, dist, out.len());
-            //Push <length> literals starting from <dist> bytes before.
-            out = Self::zlss(out, length, dist);
-            println!("Output buffer size {}", out.len());
-        }
-        Ok(out)
-    }
-
-    fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> Huffman {
-        let order : Vec<u32> = vec![16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
-        let mut lengths : Vec<u32> = vec![];
-        
-        for _i in 0..code_count {
-            //Read one 3 bit CL code length - which is reversed because it is an integer - from the stream
-            let code_length = comp.read_bits_reversed(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
-            lengths.push(code_length);
-        }
-
-        let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 8];
-        
-        //Read input bits and find code length for each symbol in order
-        for i in 0..code_count {
-            let code_len = lengths[i as usize];
-            lengths_with_symbols[code_len as usize].push(order[i as usize]);
-        }    
-       
-        let code_length_huff : Huffman = match Huffman::generate_from_length_symbols(lengths_with_symbols) {
-            Ok(x) => x,
-            Err(e) => panic!("{}", e),
-        };
-
-        code_length_huff
-    }
-
-    fn decode_code_length_code(code: u32, last_pushed : u32, stream: &mut Bits) -> Vec<u32> {
-        let mut codes : Vec<u32> = vec![];
+    loop {
+        let code : u32 = ll_huff.read_one_code(comp).expect("Couldn't read next length or literal code!");
+        println!("Found literal or length code {}", code);
 
         match code {
-            0..=15 => codes.push(code),
-            16 => {
-                let push_count = 3 + stream.read_bits_reversed(2).expect("err!");
-                for _i in 0..push_count {
-                    codes.push(last_pushed);
-                }
-            },
-            17 => {
-                let zero_count = 3 + stream.read_bits_reversed(3).expect("err!");
-                for _i in 0..zero_count {
-                    codes.push(0);
-                }
-            },
-            18 =>{
-                let zero_count = 11 + stream.read_bits_reversed(7).expect("err!");               
-                for _i in 0..zero_count {
-                    codes.push(0);
-                }
-            }
+            x if x < 256 => {
+                out.push(x as u8);
+                continue;
+                },
+            256 => break,
             _ => (),
-        }
-        codes
-    }
-
-    fn generate_dyn_huff(comp: &mut Bits, cl_huff: Huffman, symbol_count: u32) -> Huffman {
-        let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 16];
-        let comp = comp;
-        let mut code_lengths_pushed = 0u32;
-        //Read ll_count ll code lengths using cl_huff into ll_lengths
-        let mut last_pushed_length = 0u32;
-
-        loop {
-            //println!("lls : {} / {}", ll_lens_pushed, ll_count);
-            if code_lengths_pushed == symbol_count {
-                break;
-            }
-
-            let decoded : u32 = cl_huff.read_one_code(comp).expect("Couldn't decode LL huff code length using CL huff");
-            //Decode one ll length from stream using cl_huff  
-            
-            let code_lengths = Self::decode_code_length_code(decoded, last_pushed_length, comp);
-            
-            for code_length in code_lengths {
-                lengths_with_symbols[code_length as usize].push(code_lengths_pushed);
-                code_lengths_pushed += 1;
-                last_pushed_length = code_length;
-            }
-        }
-
-        let huff = match Huffman::generate_from_length_symbols(lengths_with_symbols) {
-            Ok(x) => x,
-            Err(e) => panic!("{}", e),
         };
-
-        huff 
-    }
-
-    fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        println!("Attempting to decode type 01 block!");
-        let mut out = out;
-       
-        let huff : Huffman = Self::generate_fixed_huffman(); 
-        let length_table : HashMap<u32, (u32, u32)> = Self::generate_length_table();
-        let dist_table : HashMap<u32, (u32, u32)> = Self::generate_dist_table();
-
-        loop {
-            let code = huff.read_one_code(comp)?;
-            println!("Found literal or length code {}", code);
-
-            match code {
-                x if x < 256 => {
-                    out.push(x as u8);
-                    continue;
-                    },
-                256 => break,
-                _ => (),
-            };
-            
-            //If the loop is still ongoing - decoded is a length - read distance and the read those
-            //literals into out
-            let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
-            let mut extra = 0u32;
-
-            //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
-            //are read...
-            if extra_len != 0 {
-                extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
-            }
-            println!("Decoded length code {} ", length);
-            let length = length + extra;
-            println!("Added extra bits to length {}", length); 
-            //Distance code is not huffman coded. Just a 5 bit code.
-            let dist_value = comp.read_bits(5).expect("Deflate stream is broken - couldn't read initial distance bits!"); 
-            println!("Read distance code from stream {}", dist_value);
-            //Now that we have the distance code, use the hash table to read code and extra bits to
-            //find real distance value.
         
-            let (extra_len, dist) = *dist_table.get(&dist_value).expect(&format!("Invalid fixed length huffman code was read for distance ({})", dist_value));
+        //If the loop is still ongoing - decoded is a length - read distance and the read those
+        //literals into out
 
-            let mut extra = 0u32;
+        let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
 
-            if extra_len != 0 {
-                extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
-            }
-            println!("Found distance from table {}", dist);
-            let dist = dist + extra;
-            println!("Added extra bits to distance {}", dist);
-            
-            println!("Pushing {} literals starting {} backwards onto output buffer of length {}", length, dist, out.len());
-            //Push <length> literals starting from <dist> bytes before.
-            out = Self::zlss(out, length, dist);
-            println!("Output buffer size {}", out.len());
+        println!("Decoded length code {} ", length);
+        //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
+        //are read...
+        let mut extra = 0u32;
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
         }
-
-        Ok(out)
-    }
-
-    fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
-        println!("Attempting to decode type 00 block");
-        let mut out = out;
-        //comp.skip_byte();
-        comp.read_bits(5);
-        let block_len = comp.read_bits_reversed(16).expect("Couldn't read block length from stream"); // two bytes in reversed endianness
-        let block_len_compl = comp.read_bits_reversed(16).expect("Couldn't read block lenght complement from stream");
+        let length = length + extra;
+        println!("Added extra bits to length {}", length); 
+        //Distance code is huffman coded.
+        //let dist_code = comp.read_bits().expect("Deflate stream is broken - couldn't read initial distance bits!"); 
+        let decoded_dist : u32 = dist_huff.read_one_code(comp).expect("Couldn't read next distance code");
         
-        println!("Bytes in block {block_len}");
+        println!("Read distance code from stream {}", decoded_dist);
 
-        if !block_len_compl << 16 != block_len << 16{
-            println!("Complement is invalid!");
-        } 
+        //Now that we have the distance code, use the hash table to read code and extra bits to
+        //find real distance value.
+    
+        let (extra_len, dist) = *dist_table.get(&decoded_dist).expect(&format!("Invalid dynamic huffman code was read for distance ({})", decoded_dist));
+
+        let mut extra = 0u32;
+
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
+        }
+        println!("Found distance from table {}", dist);
+        let dist = dist + extra;
+        println!("Added extra bits to distance {}", dist);
         
-        for _i in 0..block_len {
-            let next_byte = comp.read_bits(8).expect(&format!("Expected {block_len} bytes in stream - but reached end before!"));
-            out.push((next_byte as u8).reverse_bits());
-        }
-        
-        Ok(out)
+        println!("Pushing {} literals starting {} backwards onto output buffer of length {}", length, dist, out.len());
+        //Push <length> literals starting from <dist> bytes before.
+        out = zlss(out, length, dist);
+        println!("Output buffer size {}", out.len());
     }
-
-    fn generate_fixed_huffman() -> Huffman {
-        let mut bitmap : HashMap<String, u32> = HashMap::new();
-
-        //code length 7
-        let mut code = 0u32;
-
-        for value in 256..=279u32 { 
-            let code_string = format!("{:#01$b}", code, 2 + 7);     
-            bitmap.insert(code_string, value);
-            code += 1;
-        }
-
-        code = code << 1;
-        //code length 8
-        for value in 0..=143u32 {
-            let code_string = format!("{:#01$b}", code, 2 + 8);
-            bitmap.insert(code_string, value);
-            code += 1;
-        }
-
-        for value in 280..=287u32 {
-            let code_string = format!("{:#01$b}", code, 2 + 8);
-            bitmap.insert(code_string, value);
-            code += 1;
-        }
-
-        code = code << 1;
-        
-        //code length 9
-        for value in 144..=255u32 { 
-            let code_string = format!("{:#01$b}", code, 2 + 9);
-            bitmap.insert(code_string, value);
-            code += 1;
-        } 
-        
-        Huffman {bitmap}
-    }
-
-    //Push <length> literals starting from <dist> bytes before.
-    fn zlss(out : Vec<u8>, length : u32, distance: u32) -> Vec<u8> {
-        let mut out = out;
-
-        for i in (out.len())..(out.len() + length as usize) {
-            let found_literal = *out.get(i - distance as usize).expect("output buffer was not long enough - attempting to read literals that don't exist");
-            out.push(found_literal);
-        }
-
-        out
-    }
-
-
-    fn generate_length_table() -> HashMap<u32, (u32,u32)> {
-        let length_table : HashMap<u32, (u32, u32)> = HashMap::from([
-                                                                    (257, (0,3)),
-                                                                    (258, (0,4)),
-                                                                    (259, (0,5)),
-                                                                    (260, (0,6)),
-                                                                    (261, (0,7)),
-                                                                    (262, (0,8)),
-                                                                    (263, (0,10)),
-                                                                    (264, (0,10)),
-                                                                    (265, (1,11)),
-                                                                    (266, (1,13)),
-                                                                    (267, (1,15)),
-                                                                    (268, (1,17)),
-                                                                    (269, (2,19)),
-                                                                    (270, (2,23)),
-                                                                    (271, (2,27)),
-                                                                    (272, (2,31)),
-                                                                    (273, (3,35)),
-                                                                    (274, (3,43)),
-                                                                    (275, (3,51)),
-                                                                    (276, (3,59)),
-                                                                    (277, (4,67)),
-                                                                    (278, (4,83)),
-                                                                    (279, (4,99)),
-                                                                    (280, (4,115)),
-                                                                    (281, (5,131)),
-                                                                    (282, (5,163)),
-                                                                    (283, (5,195)),
-                                                                    (284, (5,225)),
-                                                                    (285, (0,258))
-        ]);
-
-        length_table
-    }
-
-    fn generate_dist_table() -> HashMap<u32, (u32,u32)> {
-        let dist_table : HashMap<u32, (u32,u32)> = HashMap::from([
-                                                                 (0, (0,1)),
-                                                                 (1, (0,2)),
-                                                                 (2, (0,3)),
-                                                                 (3, (0,3)),
-                                                                 (4, (1,5)),
-                                                                 (5, (1,7)),
-                                                                 (6, (2,9)),
-                                                                 (7, (3,13)),
-                                                                 (8, (3,17)),
-                                                                 (9, (3,25)),
-                                                                 (10, (4,33)),
-                                                                 (11, (4,49)),
-                                                                 (12, (5,65)),
-                                                                 (13, (5,97)),
-                                                                 (14, (6, 129)),
-                                                                 (15, (6, 193)),
-                                                                 (16, (7,257)),
-                                                                 (17, (7,385)),
-                                                                 (18, (8,513)),
-                                                                 (19, (8,769)),
-                                                                 (20, (9,1025)),
-                                                                 (21, (9,1537)),
-                                                                 (22, (10,2049)),
-                                                                 (23, (10,3073)),
-                                                                 (24, (11,4097)),
-                                                                 (25, (11,6145)),
-                                                                 (26, (12,8193)),
-                                                                 (27, (12,12289)),
-                                                                 (28, (13,16385)),
-                                                                 (29, (13,24577))
-        ]);
-
-        dist_table
-    }
-
-    pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32, bpp: usize) -> Result<Vec<Vec<u8>>, &'static str> {
-        println!("{} in {} scanlines" , decoded_stream.len(), height);
-        let line_size = decoded_stream.len() / height as usize; 
-        let scanlines : Vec<Vec<u8>> = decoded_stream
-                                                    .chunks(line_size)
-                                                    .map(|x| x.to_vec())
-                                                    .collect();
-        let mut filtered : Vec<Vec<u8>> = scanlines.clone();
-
-        for (index, line) in scanlines.into_iter().enumerate() {
-            filtered[index] = Filters::filter(index, &filtered, bpp);
-        }
-
-        Ok(filtered)
-    }
+    Ok(out)
 }
+
+fn generate_code_length_huff(comp: &mut Bits, code_count: u32) -> Huffman {
+    let order : Vec<u32> = vec![16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    let mut lengths : Vec<u32> = vec![];
+    
+    for _i in 0..code_count {
+        //Read one 3 bit CL code length - which is reversed because it is an integer - from the stream
+        let code_length = comp.read_bits_reversed(3).expect("Deflate stream is broken - couldn't read code length code lengths!");
+        lengths.push(code_length);
+    }
+
+    let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 8];
+    
+    //Read input bits and find code length for each symbol in order
+    for i in 0..code_count {
+        let code_len = lengths[i as usize];
+        lengths_with_symbols[code_len as usize].push(order[i as usize]);
+    }    
+   
+    let code_length_huff : Huffman = match Huffman::generate_from_length_symbols(lengths_with_symbols) {
+        Ok(x) => x,
+        Err(e) => panic!("{}", e),
+    };
+
+    code_length_huff
+}
+
+fn decode_code_length_code(code: u32, last_pushed : u32, stream: &mut Bits) -> Vec<u32> {
+    let mut codes : Vec<u32> = vec![];
+
+    match code {
+        0..=15 => codes.push(code),
+        16 => {
+            let push_count = 3 + stream.read_bits_reversed(2).expect("err!");
+            for _i in 0..push_count {
+                codes.push(last_pushed);
+            }
+        },
+        17 => {
+            let zero_count = 3 + stream.read_bits_reversed(3).expect("err!");
+            for _i in 0..zero_count {
+                codes.push(0);
+            }
+        },
+        18 =>{
+            let zero_count = 11 + stream.read_bits_reversed(7).expect("err!");               
+            for _i in 0..zero_count {
+                codes.push(0);
+            }
+        }
+        _ => (),
+    }
+    codes
+}
+
+fn generate_dyn_huff(comp: &mut Bits, cl_huff: Huffman, symbol_count: u32) -> Huffman {
+    let mut lengths_with_symbols : Vec<Vec<u32>> = vec![vec![]; 16];
+    let comp = comp;
+    let mut code_lengths_pushed = 0u32;
+    //Read ll_count ll code lengths using cl_huff into ll_lengths
+    let mut last_pushed_length = 0u32;
+
+    loop {
+        //println!("lls : {} / {}", ll_lens_pushed, ll_count);
+        if code_lengths_pushed == symbol_count {
+            break;
+        }
+
+        let decoded : u32 = cl_huff.read_one_code(comp).expect("Couldn't decode LL huff code length using CL huff");
+        //Decode one ll length from stream using cl_huff  
+        
+        let code_lengths = decode_code_length_code(decoded, last_pushed_length, comp);
+        
+        for code_length in code_lengths {
+            lengths_with_symbols[code_length as usize].push(code_lengths_pushed);
+            code_lengths_pushed += 1;
+            last_pushed_length = code_length;
+        }
+    }
+
+    let huff = match Huffman::generate_from_length_symbols(lengths_with_symbols) {
+        Ok(x) => x,
+        Err(e) => panic!("{}", e),
+    };
+
+    huff 
+}
+
+fn decode_block_fixed(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    println!("Attempting to decode type 01 block!");
+    let mut out = out;
+   
+    let huff : Huffman = generate_fixed_huffman(); 
+    let length_table : HashMap<u32, (u32, u32)> = generate_length_table();
+    let dist_table : HashMap<u32, (u32, u32)> = generate_dist_table();
+
+    loop {
+        let code = huff.read_one_code(comp)?;
+        println!("Found literal or length code {}", code);
+
+        match code {
+            x if x < 256 => {
+                out.push(x as u8);
+                continue;
+                },
+            256 => break,
+            _ => (),
+        };
+        
+        //If the loop is still ongoing - decoded is a length - read distance and the read those
+        //literals into out
+        let (extra_len, length) = *length_table.get(&code).expect("Invalid fixed length huffman code was read for length!");
+        let mut extra = 0u32;
+
+        //Extra length bits are read MSB first instead of the usual LSB that all the other bytes
+        //are read...
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra bits");
+        }
+        println!("Decoded length code {} ", length);
+        let length = length + extra;
+        println!("Added extra bits to length {}", length); 
+        //Distance code is not huffman coded. Just a 5 bit code.
+        let dist_value = comp.read_bits(5).expect("Deflate stream is broken - couldn't read initial distance bits!"); 
+        println!("Read distance code from stream {}", dist_value);
+        //Now that we have the distance code, use the hash table to read code and extra bits to
+        //find real distance value.
+    
+        let (extra_len, dist) = *dist_table.get(&dist_value).expect(&format!("Invalid fixed length huffman code was read for distance ({})", dist_value));
+
+        let mut extra = 0u32;
+
+        if extra_len != 0 {
+            extra = comp.read_bits_reversed(extra_len).expect("Deflate stream is broken - couldn't read extra distance bits!");
+        }
+        println!("Found distance from table {}", dist);
+        let dist = dist + extra;
+        println!("Added extra bits to distance {}", dist);
+        
+        println!("Pushing {} literals starting {} backwards onto output buffer of length {}", length, dist, out.len());
+        //Push <length> literals starting from <dist> bytes before.
+        out = zlss(out, length, dist);
+        println!("Output buffer size {}", out.len());
+    }
+
+    Ok(out)
+}
+
+fn decode_block_none(comp: &mut Bits, out : Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    println!("Attempting to decode type 00 block");
+    let mut out = out;
+    //comp.skip_byte();
+    comp.read_bits(5);
+    let block_len = comp.read_bits_reversed(16).expect("Couldn't read block length from stream"); // two bytes in reversed endianness
+    let block_len_compl = comp.read_bits_reversed(16).expect("Couldn't read block lenght complement from stream");
+    
+    println!("Bytes in block {block_len}");
+
+    if !block_len_compl << 16 != block_len << 16{
+        println!("Complement is invalid!");
+    } 
+    
+    for _i in 0..block_len {
+        let next_byte = comp.read_bits(8).expect(&format!("Expected {block_len} bytes in stream - but reached end before!"));
+        out.push((next_byte as u8).reverse_bits());
+    }
+    
+    Ok(out)
+}
+
+fn generate_fixed_huffman() -> Huffman {
+    let mut bitmap : HashMap<String, u32> = HashMap::new();
+
+    //code length 7
+    let mut code = 0u32;
+
+    for value in 256..=279u32 { 
+        let code_string = format!("{:#01$b}", code, 2 + 7);     
+        bitmap.insert(code_string, value);
+        code += 1;
+    }
+
+    code = code << 1;
+    //code length 8
+    for value in 0..=143u32 {
+        let code_string = format!("{:#01$b}", code, 2 + 8);
+        bitmap.insert(code_string, value);
+        code += 1;
+    }
+
+    for value in 280..=287u32 {
+        let code_string = format!("{:#01$b}", code, 2 + 8);
+        bitmap.insert(code_string, value);
+        code += 1;
+    }
+
+    code = code << 1;
+    
+    //code length 9
+    for value in 144..=255u32 { 
+        let code_string = format!("{:#01$b}", code, 2 + 9);
+        bitmap.insert(code_string, value);
+        code += 1;
+    } 
+    
+    Huffman {bitmap}
+}
+
+//Push <length> literals starting from <dist> bytes before.
+fn zlss(out : Vec<u8>, length : u32, distance: u32) -> Vec<u8> {
+    let mut out = out;
+
+    for i in (out.len())..(out.len() + length as usize) {
+        let found_literal = *out.get(i - distance as usize).expect("output buffer was not long enough - attempting to read literals that don't exist");
+        out.push(found_literal);
+    }
+
+    out
+}
+
+
+fn generate_length_table() -> HashMap<u32, (u32,u32)> {
+    let length_table : HashMap<u32, (u32, u32)> = HashMap::from([
+                                                                (257, (0,3)),
+                                                                (258, (0,4)),
+                                                                (259, (0,5)),
+                                                                (260, (0,6)),
+                                                                (261, (0,7)),
+                                                                (262, (0,8)),
+                                                                (263, (0,10)),
+                                                                (264, (0,10)),
+                                                                (265, (1,11)),
+                                                                (266, (1,13)),
+                                                                (267, (1,15)),
+                                                                (268, (1,17)),
+                                                                (269, (2,19)),
+                                                                (270, (2,23)),
+                                                                (271, (2,27)),
+                                                                (272, (2,31)),
+                                                                (273, (3,35)),
+                                                                (274, (3,43)),
+                                                                (275, (3,51)),
+                                                                (276, (3,59)),
+                                                                (277, (4,67)),
+                                                                (278, (4,83)),
+                                                                (279, (4,99)),
+                                                                (280, (4,115)),
+                                                                (281, (5,131)),
+                                                                (282, (5,163)),
+                                                                (283, (5,195)),
+                                                                (284, (5,225)),
+                                                                (285, (0,258))
+    ]);
+
+    length_table
+}
+
+fn generate_dist_table() -> HashMap<u32, (u32,u32)> {
+    let dist_table : HashMap<u32, (u32,u32)> = HashMap::from([
+                                                             (0, (0,1)),
+                                                             (1, (0,2)),
+                                                             (2, (0,3)),
+                                                             (3, (0,3)),
+                                                             (4, (1,5)),
+                                                             (5, (1,7)),
+                                                             (6, (2,9)),
+                                                             (7, (3,13)),
+                                                             (8, (3,17)),
+                                                             (9, (3,25)),
+                                                             (10, (4,33)),
+                                                             (11, (4,49)),
+                                                             (12, (5,65)),
+                                                             (13, (5,97)),
+                                                             (14, (6, 129)),
+                                                             (15, (6, 193)),
+                                                             (16, (7,257)),
+                                                             (17, (7,385)),
+                                                             (18, (8,513)),
+                                                             (19, (8,769)),
+                                                             (20, (9,1025)),
+                                                             (21, (9,1537)),
+                                                             (22, (10,2049)),
+                                                             (23, (10,3073)),
+                                                             (24, (11,4097)),
+                                                             (25, (11,6145)),
+                                                             (26, (12,8193)),
+                                                             (27, (12,12289)),
+                                                             (28, (13,16385)),
+                                                             (29, (13,24577))
+    ]);
+
+    dist_table
+}
+
+pub fn decompressed_to_scanlines(decoded_stream: Vec<u8>, image_height: u32) -> Vec<Vec<u8>> {
+    let line_size = decoded_stream.len() / image_height as usize; 
+    decoded_stream
+                .chunks(line_size)
+                .map(|x| x.to_vec())
+                .collect()
+}
+
+/*
+pub fn defilter(decoded_stream: Vec<u8>, height: u32, width : u32, ) -> Result<Vec<Vec<u8>>, &'static str> {
+    println!("{} in {} scanlines" , decoded_stream.len(), height);
+    let line_size = decoded_stream.len() / height as usize; 
+    let scanlines : Vec<Vec<u8>> = decoded_stream
+                                                .chunks(line_size)
+                                                .map(|x| x.to_vec())
+                                                .collect();
+    let defiltered = Defilter {channels, bit_depth, scanlines};
+}
+*/
+
 
 #[derive(Clone)]
 pub struct Huffman {
@@ -673,137 +660,181 @@ impl Huffman {
     pub fn get(&self,  key : &String) -> Option<&u32>{
         self.bitmap.get(key)
     }
-
-
 }
 
 
-pub struct Filters {
-
+pub struct Defilter {
+    channels : usize,
+    bit_depth: u32,
+    scanlines : Vec<Vec<u8>>,
+    defiltered : Vec<Vec<u8>>,
 }
 
-impl Filters {
-    pub fn filter(line_num: usize, scanlines: &Vec<Vec<u8>>, bpp: usize) -> Vec<u8>{
-        let line = scanlines[line_num].clone();
-        let (filter, line) = line.split_at(1);
-        match filter[0] {
-            0 => line.to_vec(),
-            1 => Self::sub(line_num, scanlines, bpp),
-            2 => Self::up(line_num, scanlines),
-            3 => Self::ave(line_num, scanlines, bpp),
-            4 => Self::paeth(line_num, scanlines, bpp),
+impl Defilter {
+    pub fn new(channels : usize, bit_depth : u32, scanlines: Vec<Vec<u8>>) -> Defilter{
+        let scanline_count = scanlines.len();
+
+        Defilter {
+            channels : channels,
+            bit_depth : bit_depth,
+            scanlines : scanlines,
+            defiltered : vec![vec![]; scanline_count]
+        }
+    } 
+
+    pub fn defilter(&mut self) -> Result<Vec<Vec<u8>>, &'static str> {
+        for scanline_num in 0..self.scanlines.len() {
+            self.defilter_line(scanline_num);
+        } 
+        Ok(self.defiltered.clone())
+    }
+
+    fn defilter_line(&mut self, line_num: usize) {
+        let line = self.scanlines[line_num].clone();
+        let filter = line.get(0).unwrap_or(&5);
+        match filter {
+            0 => self.defilter_line_by_none(line_num),
+            1 => self.defilter_line_by_sub(line_num),
+            2 => self.defilter_line_by_up(line_num),
+            3 => self.defilter_line_by_ave(line_num),
+            4 => self.defilter_line_by_paeth(line_num),
             _ => panic!("INVALID FILTER TYPE!")
         }
     }
     
-    fn get_filterless_line(line_num : usize, scanlines : &Vec<Vec<u8>>) -> Vec<u8> {
-        let mut line = scanlines[line_num].clone();
+    fn get_filterless_line(&self, line_num : usize) -> Vec<u8> {
+        let mut line = self.scanlines[line_num].clone();
         line.into_iter().skip(1).collect()
     }
+
+    fn get_bytes_per_sample(&self) -> usize {
+        match self.bit_depth / 8 {
+            0 => 1,
+            _ => (self.bit_depth / 8) as usize,
+        }
+    }
+
+    fn get_bytes_per_pixel(&self) -> usize {
+        self.channels * self.get_bytes_per_sample()
+    }
+
+    fn get_left_pixel_bytes(&self, origin_row : usize, origin_column: usize) -> Vec<u8> {
+        let bytes_per_pixel = self.get_bytes_per_pixel();
+        let mut out = vec![];
+
+        for i in origin_column..(origin_column + bytes_per_pixel) {
+            match i < bytes_per_pixel {
+                true => out.push(0),
+                false => out.push(self.defiltered[origin_row][i - bytes_per_pixel])   
+            }
+        }
+
+        out
+    }
     
-    //NOTE: scanlines is always accessed with index + 1 because get_filterless_line has 1 less elem
-    //per line than scanlines.
+    fn get_up_pixel_bytes(&self, origin_row : usize, origin_column: usize) -> Vec<u8> {
+        let bytes_per_pixel = self.get_bytes_per_pixel();
+        let mut out = vec![];
+        let row_above = match origin_row < 1 {
+            true => vec![0; bytes_per_pixel],
+            false => self.defiltered[origin_row - 1].clone()
+        };
 
-    fn sub(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp : usize) -> Vec<u8> {
+        for i in origin_column..(origin_column + bytes_per_pixel) {
+            out.push(row_above[i]);
+        }    
+
+        out
+   }
+
+    fn get_upper_left_pixel_bytes(&self, origin_row : usize, origin_column: usize) -> Vec<u8> {
+        let bytes_per_pixel = self.get_bytes_per_pixel();
+        let mut out = vec![];
+        let row_above = match origin_row < 1 {
+            true => vec![0; bytes_per_pixel],
+            false => self.defiltered[origin_row - 1].clone()
+        };
+
+        for i in origin_column..(origin_column + bytes_per_pixel) {
+            match i < bytes_per_pixel {
+                true => out.push(0),
+                false => out.push(row_above[i - bytes_per_pixel])   
+            }
+        }
+
+        out
+    }
+
+    fn defilter_line_by_none(&mut self, line_num : usize) {
+        println!("none");
+        let mut line = self.get_filterless_line(line_num);
+        self.defiltered[line_num].append(&mut line);
+    }
+
+    fn defilter_line_by_sub(&mut self, line_num : usize) {
         println!("sub");
-        let mut out = vec![];
-        let mut line = Self::get_filterless_line(line_num, scanlines);
-        let mut channel = 0;
+        let line = self.get_filterless_line(line_num);
+        let bytes_per_pixel = self.get_bytes_per_pixel();
 
-        for (index, filtered_byte) in line.iter().enumerate() {
-            let defiltered_byte = (*filtered_byte) as u32 + match index {
-                _ if index < 3 + channel => 0,
-                _ => {
-                    //println!("s {} r {}", index, index - (3 * bpp));
-                    out[index-(3*bpp)]},
-            } as u32;
-            //println!("filt : {filtered_byte}"); 
-            let defiltered_byte = (defiltered_byte % 256) as u8;
-            //println!("defit: {defiltered_byte}");
-            out.push(defiltered_byte);
-            channel = (channel + 1) % 3
-            //out.push(0u8);
+        for (index, filtered_pixel_bytes) in line.chunks(bytes_per_pixel).enumerate() {
+            let left_pixel_bytes = self.get_left_pixel_bytes(line_num, index * bytes_per_pixel);
+            let mut defiltered_pixel_bytes : Vec<u8> = left_pixel_bytes.into_iter().zip(filtered_pixel_bytes.into_iter())
+                                            .map(|(left, filtered)| ((*filtered as u32 + left as u32) % 256) as u8)
+                                            .collect();
+            self.defiltered[line_num].append(&mut defiltered_pixel_bytes);
         }
-
-        out
     }
 
-    fn up(line_num : usize , scanlines : &Vec<Vec<u8>>) -> Vec<u8> {
+    fn defilter_line_by_up(&mut self, line_num : usize) {
         println!("up");
-        let mut out = vec![];
-        let mut line = Self::get_filterless_line(line_num, scanlines);
+        let line = self.get_filterless_line(line_num);
+        let bytes_per_pixel = self.get_bytes_per_pixel();
 
-        for (index, byte) in line.iter().enumerate() { 
-            let defiltered_byte = *byte as u32 + match line_num { 
-                0 => 0,
-                _ => scanlines[line_num - 1][index], 
-            } as u32;
-            
-            let defiltered_byte = (defiltered_byte % 256) as u8;
-
-            out.push(defiltered_byte);
+        for (index, filtered_pixel_bytes) in line.chunks(bytes_per_pixel).enumerate() { 
+            let up_pixel_bytes = self.get_up_pixel_bytes(line_num, index * bytes_per_pixel);
+            let mut defiltered_pixel_bytes : Vec<u8> = up_pixel_bytes.into_iter().zip(filtered_pixel_bytes.into_iter())
+                                        .map(|(up, filtered)| ((*filtered as u32 + up as u32) % 256) as u8)
+                                        .collect();
+            self.defiltered[line_num].append(&mut defiltered_pixel_bytes); 
         }
-
-        out
     }
 
-    fn ave(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp : usize) -> Vec<u8> {
+    fn defilter_line_by_ave(&mut self, line_num : usize) {
         println!("ave");
-        let mut out = vec![];
-        let mut line = Self::get_filterless_line(line_num, scanlines);
-        let mut channel = 0;
+        let line = self.get_filterless_line(line_num);
+        let bytes_per_pixel = self.get_bytes_per_pixel();
 
-        for (index, byte) in line.iter().enumerate() {
-            let left : u32 = match index {
-                _ if index < 3 + channel => 0,
-                _ => out[index-(3 * bpp)],
-            } as u32;
-            let up : u32 = match line_num {
-                0 => 0,
-                _ => scanlines[line_num - 1][index], 
-            } as u32;
-            //MAY CAUSE ERRORS DUE TO ROUNDING - CONV TO F64:
-            let av = ((left as f64 + up as f64 ) / 2.0).floor(); 
-            let defiltered_byte = ((*byte as u32  + av as u32)%256) as u8;
-            out.push(defiltered_byte);
-            channel = (channel + 1) % 3
+        for (index, filtered_pixel_bytes) in line.chunks(bytes_per_pixel).enumerate() {
+            let left_pixel_bytes = self.get_left_pixel_bytes(line_num, index * bytes_per_pixel);
+            let up_pixel_bytes = self.get_up_pixel_bytes(line_num, index * bytes_per_pixel);
+            let mut defiltered_pixel_bytes : Vec<u8> = up_pixel_bytes.into_iter()
+                                                    .zip(left_pixel_bytes.into_iter())
+                                                    .map(|(up, left)| ((up as f64 + left as f64) / 2.0).floor())
+                                                    .zip(filtered_pixel_bytes.into_iter())
+                                                    .map(|(ave, filtered)|  ((*filtered as u32 + ave as u32) % 256) as u8)
+                                                    .collect();
+            self.defiltered[line_num].append(&mut defiltered_pixel_bytes);
         }
-
-        out
     }
 
-    fn paeth(line_num : usize, scanlines : &Vec<Vec<u8>>, bpp: usize) -> Vec<u8> {
+    fn defilter_line_by_paeth(&mut self, line_num : usize) {
         println!("paeth");
-        let mut out = vec![]; 
-        let line = Self::get_filterless_line(line_num, scanlines);
-        let mut channel = 0;
+        let line = self.get_filterless_line(line_num);
+        let bytes_per_pixel = self.get_bytes_per_pixel();
 
-        for (index, byte) in line.iter().enumerate() { 
-            let left : u32 = match index {
-                _ if index < 3 + channel => 0,
-                _ => out[index-(3*bpp)],
-            } as u32;
-
-            
-            let up : u32 = match line_num {
-                0 => 0,
-                _ => scanlines[line_num-1][index],
-            } as u32;
-           
-            
-            let up_left : u32 = match (line_num, index) {
-                _ if line_num < 1 => 0,
-                _ if index < 3 + channel => 0,
-                _ => scanlines[line_num-1][index-(3*bpp)],
-            } as u32;
-
-            let defiltered_byte = (*byte) as u32 + (Self::get_paeth_predictor(left as u32, up as u32, up_left as u32));
-            out.push((defiltered_byte % 256) as u8);
-            //out.push(0u8);
-            channel = (channel + 1) % 3;
+        for (index, filtered_pixel_bytes) in line.chunks(bytes_per_pixel).enumerate() { 
+            let left_pixel_bytes = self.get_left_pixel_bytes(line_num, index * bytes_per_pixel);
+            let up_pixel_bytes = self.get_up_pixel_bytes(line_num, index * bytes_per_pixel);
+            let upper_left_pixel_bytes = self.get_upper_left_pixel_bytes(line_num, index * bytes_per_pixel);
+            let mut defiltered_pixel_bytes : Vec<u8> = left_pixel_bytes.into_iter()
+                                                    .zip(up_pixel_bytes.into_iter())
+                                                    .zip(upper_left_pixel_bytes.into_iter())
+                                                    .map(|((left, up), up_left)| Self::get_paeth_predictor(left as u32, up as u32, up_left as u32))
+                                                    .zip(filtered_pixel_bytes.into_iter())
+                                                    .map(|(paeth, filtered)|  ((*filtered as u32 + paeth as u32) % 256) as u8)
+                                                    .collect();
+            self.defiltered[line_num].append(&mut defiltered_pixel_bytes);
         }
-
-        out
     }
 
     fn get_paeth_predictor(left: u32, up: u32, upleft: u32) -> u32 {

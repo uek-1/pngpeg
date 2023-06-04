@@ -1,7 +1,7 @@
 use crate::pixel::Pixels;
-use crate::utils::Deflate;
 use std::fs;
-use crate::utils::CRC32;
+use crate::utils;
+use crate::utils::Defilter;
 
 pub enum Png {
     Decoded(DecPng),
@@ -31,7 +31,7 @@ impl PngChunk {
         let mut crc_data = ChunkType::bytes_from_type(self.get_type())?.to_vec();
         crc_data.append(&mut chunk_data.clone());
 
-        match CRC32::png_crc(crc_data) {
+        match utils::png_crc(crc_data) {
             Ok(x) if x == self.get_crc() => Ok(true),
             Ok(_) => Ok(false),
             Err(x) => Err(x),
@@ -278,22 +278,31 @@ impl TryFrom<EncPng> for DecPng {
 
     fn try_from(encpng: EncPng) -> Result<Self, Self::Error> {
         //let scanlines = encpng.get_deflate_stream().decompress().scalines().defilter()
-        let (height, width, depth, color, il) = (encpng.get_height()?, encpng.get_width()?, encpng.get_pixel_depth()?, encpng.get_color_type()?, encpng.get_interlace_type()?);
-        
-        let bpp = match depth / 8 {
+        let (height, width, bit_depth, color, il) = (encpng.get_height()?, encpng.get_width()?, encpng.get_pixel_depth()?, encpng.get_color_type()?, encpng.get_interlace_type()?);
+        let channels : usize = match color {
             0 => 1,
-            _ => depth / 8,
-        } as usize;
+            2 => 3,
+            3 => 1,
+            4 => 2,
+            6 => 4,
+            _ => return Err("INVALI COLOR TYPE!")
+        };
 
         println!("PNG DIMENSIONS : width {} height {}", width, height);
-        println!("depth {} bpp {} color {} il {}", depth, bpp, color, il);
+        println!("depth {} bpp {} color {} channels {} il {}", bit_depth, bit_depth / 8, color, channels, il);
 
         let compressed_stream = encpng.get_deflate_stream();
-        let decoded_stream = Deflate::decompress(compressed_stream)?;
-        println!("{}", decoded_stream.len());
-        let defiltered_stream = Deflate::defilter(decoded_stream, height, width, bpp)?;
+        let decompressed_stream = utils::decompress(compressed_stream)?;
+
+        println!("Decompressed bytes {}", decompressed_stream.len());
         
-        println!("depth {} bpp {} color {} il {}", depth, bpp, color, il);
+        let scanlines = utils::decompressed_to_scanlines(decompressed_stream, height);
+        
+        let mut defilter = Defilter::new(channels, bit_depth, scanlines);
+
+        let defiltered_stream = defilter.defilter()?;
+        
+        println!("depth {} bpp {} color {} il {}", bit_depth, bit_depth / 8, color, il);
 
         Ppm::write_to_p3(width, height, String::from("out.ppm"), defiltered_stream)?;
 
