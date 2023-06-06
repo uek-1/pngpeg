@@ -1,4 +1,4 @@
-use crate::pixel::Pixels;
+use crate::pixel::{Pixel, Pixels, ColorType};
 use std::fs;
 use crate::utils;
 use crate::utils::Defilter;
@@ -253,22 +253,22 @@ impl TryFrom<Vec<u8>> for EncPng {
     }
 }
 pub struct DecPng {
-    scanlines: Vec<Pixels>,
+    scanlines: Pixels,
 }
 
 impl DecPng {
     pub fn new() -> DecPng {
-        DecPng { scanlines: vec![] }
+        DecPng { scanlines: Pixels::new() }
     }
 
-    pub fn set_scanlines(&mut self, scanlines: Vec<Pixels>) {
-        self.scanlines = scanlines;
+    pub fn set_scanlines(&mut self, scanlines: Vec<Vec<Pixel>>) {
+        self.scanlines = Pixels::from(scanlines);
     }
 
 }
 
-impl From<Vec<Pixels>> for DecPng {
-    fn from(scanlines: Vec<Pixels>) -> Self {
+impl From<Pixels> for DecPng {
+    fn from(scanlines: Pixels) -> Self {
         DecPng { scanlines }
     }
 }
@@ -291,22 +291,24 @@ impl TryFrom<EncPng> for DecPng {
         println!("PNG DIMENSIONS : width {} height {}", width, height);
         println!("depth {} bpp {} color {} channels {} il {}", bit_depth, bit_depth / 8, color, channels, il);
 
-        let compressed_stream = encpng.get_deflate_stream();
-        let decompressed_stream = utils::decompress(compressed_stream)?;
+        let compressed_stream : Vec<u8> = encpng.get_deflate_stream();
+        let decompressed_stream : Vec<u8> = utils::decompress(compressed_stream)?;
 
         println!("Decompressed bytes {}", decompressed_stream.len());
         
-        let scanlines = utils::decompressed_to_scanlines(decompressed_stream, height);
+        let filtered_scanlines : Vec<Vec<u8>> = utils::decompressed_to_scanlines(decompressed_stream, height);
         
-        let mut defilter = Defilter::new(channels, bit_depth, scanlines);
+        let mut defilter = Defilter::new(channels, bit_depth, filtered_scanlines);
 
-        let defiltered_stream = defilter.defilter()?;
-        
+        let defiltered_scanlines : Vec<Vec<u8>> = defilter.defilter()?;
+
         println!("depth {} bpp {} color {} il {}", bit_depth, bit_depth / 8, color, il);
 
-        Ppm::write_to_p3(width, height, String::from("out.ppm"), defiltered_stream)?;
+        Ppm::write_to_p3(width, height, String::from("out.ppm"), &defiltered_scanlines)?;
 
-        Ok(DecPng::new())
+        let scanlines = utils::defiltered_to_pixels(defiltered_scanlines, color as usize);
+
+        Ok(DecPng::from(scanlines))
     }
 }
 
@@ -315,8 +317,8 @@ pub struct Ppm {
 }
 
 impl Ppm {
-    pub fn write_to_p3(width:u32, height:u32, path: String, scanlines: Vec<Vec<u8>>) -> Result<(), &'static str> {
-        let mut write_string = format!("P3\n{} {}\n {}\n", width, height, 255);
+    pub fn write_to_p3(width:u32, height:u32, path: String, scanlines: &Vec<Vec<u8>>) -> Result<(), &'static str> {
+        let mut write_string = format!("P3\n{} {}\n{}\n", width, height, 255);
 
         let mut char_count = 0;
         for scanline in scanlines {
