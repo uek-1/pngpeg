@@ -815,7 +815,14 @@ impl Defilter {
 pub fn defiltered_to_pixels(defiltered_scanlines : Vec<Vec<u8>>, png_color_type : usize) -> Pixels {
     let pixel_color_type = ColorType::from_png_color_type(png_color_type);
     let mut pixels = Pixels::new();
-    pixels.push(vec![]);
+    
+    for (idx, scanline) in defiltered_scanlines.into_iter().enumerate() {
+        pixels.push(vec![]);
+        for pixel_data in scanline.chunks(pixel_color_type.to_channels())  {
+            pixels[idx].push(Pixel::new(pixel_color_type, pixel_data.to_vec()));
+        }
+    }
+
     pixels
 }
 
