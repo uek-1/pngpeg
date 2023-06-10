@@ -4,6 +4,8 @@ use std::io::{BufReader, Read};
 
 mod png;
 use png::{EncPng, DecPng, WriteToPPM};
+mod jpeg;
+use jpeg::{EncJpeg, DecJpeg};
 mod utils;
 mod pixel;
 

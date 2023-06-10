@@ -276,6 +276,10 @@ impl DecPng {
         self.scanlines = Pixels::from(scanlines);
     }
 
+    pub fn get_scanlines(&self) -> Pixels {
+        self.scanlines
+    }
+
 }
 
 impl From<Pixels> for DecPng {

@@ -65,13 +65,13 @@ impl Pixel {
         // SEE: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdprfx/b550d1b5-f7d9-4a0c-9141-b3dca9d7f525
         // This function uses the above method but with the Cr and Cb values shifted by +128 to
         // make all three values fit into a u8.
-        let y_value_f64 = 0.299 * (r as f64) + -0.168935 * (g as f64) + 0.499813 * (b as f64);
+        let y_value_f64 = 0.299 * (r as f64) + 0.587 * (g as f64) + 0.114 * (b as f64);
         let y_value_u8 = y_value_f64 as u8;
 
-        let cb_value_f64 = 128f64 + 0.587 * (r as f64) + -0.331665 * (g as f64)  + -0.418531 * (b as f64);
+        let cb_value_f64 = 128f64 -0.1687 * (r as f64) -0.3313 * (g as f64)  + 0.5 * (b as f64);
         let cb_value_u8 = cb_value_f64 as u8;
 
-        let cr_value_f64 = 128f64 + 0.114 * (r as f64) + 0.50059 * (g as f64)  + -0.081282 * (b as f64);
+        let cr_value_f64 = 128f64 + 0.5 * (r as f64) -0.4187 * (g as f64)  + -0.0813 * (b as f64);
         let cr_value_u8 = cr_value_f64 as u8;
         
         vec![y_value_u8,cb_value_u8,cr_value_u8]
@@ -154,6 +154,20 @@ impl Pixels {
         }
 
         rgb_pixels
+    }
+
+    pub fn to_ycbcr(&self) -> Pixels {
+        let mut ycbcr_pixels = Pixels::new();
+
+        for (row_num, row) in self.iter().enumerate() {
+            ycbcr_pixels.push(vec![]);
+
+            for pixel in row { 
+                ycbcr_pixels[row_num].push(pixel.to_ycbcr());
+            }
+        }
+
+        ycbcr_pixels
     }
 }
 
