@@ -148,6 +148,17 @@ impl EncPng {
         println!("{}", deflate_stream.len());
         deflate_stream
     }
+
+    pub fn get_plte_bytes(&self) -> Result<Vec<u8>, &'static str> {
+        let plte_bytes = self.chunks
+            .iter()
+            .find(|x| *x.get_type() == ChunkType::PLTE);
+        
+        match plte_bytes {
+            Some(chunk) => Ok(chunk.get_data().clone()),
+            None => Err("Couldn't find PLTE chunk!")
+        }
+    }
     
     fn get_ihdr_info(&self, start: usize, bytes: usize) -> Result<u32, &'static str> {
         let info : Vec<u8> = self.chunks
@@ -285,7 +296,12 @@ impl TryFrom<EncPng> for DecPng {
             3 => 1,
             4 => 2,
             6 => 4,
-            _ => return Err("INVALI COLOR TYPE!")
+            _ => return Err("INVALID COLOR TYPE!")
+        };
+
+        let plte_bytes : Vec<u8> = match color {
+            3 => encpng.get_plte_bytes()?,
+            _ => vec![],
         };
 
         println!("PNG DIMENSIONS : width {} height {}", width, height);
@@ -304,27 +320,27 @@ impl TryFrom<EncPng> for DecPng {
 
         println!("depth {} bpp {} color {} il {}", bit_depth, bit_depth / 8, color, il);
 
-        Ppm::write_to_p3(width, height, String::from("out.ppm"), &defiltered_scanlines)?;
-
         let scanlines = utils::defiltered_to_pixels(defiltered_scanlines, color as usize);
 
-        Ok(DecPng::from(scanlines))
+        let scanlines_decoded_plte = match scanlines[0][0].get_color_type() {
+            ColorType::PLTE => scanlines.decode_plte(plte_bytes), 
+            _ => scanlines,
+        };
+
+        Ok(DecPng::from(scanlines_decoded_plte))
     }
 }
 
-pub struct Ppm {
-
-}
-
-impl Ppm {
-    pub fn write_to_p3(width:u32, height:u32, path: String, scanlines: &Vec<Vec<u8>>) -> Result<(), &'static str> {
-        let mut write_string = format!("P3\n{} {}\n{}\n", width, height, 255);
-
+impl WriteToPPM for DecPng {
+    fn write_to_p3(&self, path: String) {
+        let rgb_pixels : Pixels = self.scanlines.to_rgb();
+        let mut write_string = format!("P3\n{} {}\n{}\n", rgb_pixels.len(), rgb_pixels[0].len(), 255);
         let mut char_count = 0;
-        for scanline in scanlines {
-            for pattern in scanline.chunks(3) {
-                let triple_str = match pattern {
-                    &[r,g,b] => format!("{r} {g} {b}  "),
+
+        for row in rgb_pixels.iter() {
+            for pixel in row {
+                let triple_str : String = match pixel.get_color_values().as_slice() { 
+                    &[r, g ,b] => format!("{r} {g} {b}  "),
                     _ => String::from(" "),
                 };
 
@@ -335,13 +351,17 @@ impl Ppm {
                     continue;
                 }
 
-                char_count += 13;
                 write_string.push_str(&triple_str);
+                char_count += 13;
             }
             write_string.push_str("\n");
         }
-        
         fs::write(&path, write_string).expect("Unable to write file");
-        Ok(())
     }
 }
+
+pub trait WriteToPPM {
+    fn write_to_p3(&self, path: String);
+}
+
+

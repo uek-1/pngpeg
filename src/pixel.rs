@@ -52,6 +52,14 @@ impl Pixel {
             color_values 
         } 
     }
+
+    pub fn get_color_values(&self) -> Vec<u8> {
+        self.color_values.clone()
+    }
+
+    pub fn get_color_type(&self) -> ColorType {
+        self.color_type
+    }
     
     fn rgb_to_ycbcr(r: u8, g: u8, b: u8) -> Vec<u8> {
         // SEE: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdprfx/b550d1b5-f7d9-4a0c-9141-b3dca9d7f525
@@ -69,14 +77,28 @@ impl Pixel {
         vec![y_value_u8,cb_value_u8,cr_value_u8]
     }
 
-    fn decode_plte(&mut self) {}
+    fn decode_plte(&self, plte_bytes : &Vec<u8>) -> Pixel {
+        
+        let plte_index = (self.color_values[0] * 3) as usize;
+        let color_values = vec![plte_bytes[plte_index], 
+            plte_bytes[plte_index + 1], 
+            plte_bytes[plte_index + 2]
+        ];
+
+        Pixel {
+            color_type : ColorType::RGB,
+            channels : 3,
+            color_values : color_values,
+        }
+    }
+    
     
     pub fn to_rgb(&self) -> Pixel {
         let rgb_data = match self.color_type {
             ColorType::RGB => self.color_values.clone(),
             ColorType::RGBA => self.color_values.clone()[0..3].to_vec(),
             ColorType::GS | ColorType::GSA => vec![self.color_values[0]; 3],
-            _ => panic!(),
+            _ => panic!("Cannot change pixel type into RGB!"),
         };
 
         Pixel::new(ColorType::RGB, rgb_data)
@@ -103,6 +125,35 @@ pub struct Pixels(Vec<Vec<Pixel>>);
 impl Pixels {
     pub fn new() -> Pixels {
         Pixels(vec![])
+    }
+
+    pub fn decode_plte(&self, plte_bytes : Vec<u8>) -> Pixels { 
+        let mut rgb_pixels = Pixels::new();
+        
+        for (row_num, row) in self.iter().enumerate() {
+            rgb_pixels.push(vec![]);
+
+            for pixel in row {
+                rgb_pixels[row_num].push(pixel.decode_plte(&plte_bytes));
+            }
+        }
+
+        rgb_pixels
+
+    }
+
+    pub fn to_rgb(&self) -> Pixels {
+        let mut rgb_pixels = Pixels::new();
+        
+        for (row_num, row) in self.iter().enumerate() {
+            rgb_pixels.push(vec![]);
+
+            for pixel in row {
+                rgb_pixels[row_num].push(pixel.to_rgb());
+            }
+        }
+
+        rgb_pixels
     }
 }
 

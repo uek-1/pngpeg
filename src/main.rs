@@ -3,7 +3,7 @@ use std::io;
 use std::io::{BufReader, Read};
 
 mod png;
-use png::{EncPng, DecPng};
+use png::{EncPng, DecPng, WriteToPPM};
 mod utils;
 mod pixel;
 
@@ -27,6 +27,7 @@ fn main() -> io::Result<()> {
 
     png_file.print_chunks();
     let dec_png_file : DecPng = png_file.decompress().expect("Couldn't decompress PNG file");
+    dec_png_file.write_to_p3("out.ppm".to_string());
 
 
     Ok(())
