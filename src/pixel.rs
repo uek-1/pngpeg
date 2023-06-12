@@ -116,7 +116,7 @@ impl Pixel {
         };
 
         Pixel::new(ColorType::YCbCr, ycbcr_data)
-    }
+    } 
 }
 
 
@@ -168,6 +168,29 @@ impl Pixels {
         }
 
         ycbcr_pixels
+    }
+
+    pub fn subsample_ycbcr(&self) -> Pixels {
+        //4 : 2 : 0 subsampling. 
+
+        let mut subsampled_pixels = Pixels::new();
+
+        for y in 0..self.len() {
+            let mut row = vec![];
+            for x in 0..self[y].len() {
+                match (y % 2, x % 2) {
+                    (0, 0) => row.push(self[y][x].clone()),
+                    (0, 1) => row.push(self[y][x-1].clone()),
+                    (1, 0) => row.push(self[y-1][x].clone()),
+                    (1, 1) => row.push(self[y-1][x-1].clone()),
+                    _ => (),
+                }
+            }
+
+            subsampled_pixels.push(row);
+        } 
+
+        subsampled_pixels
     }
 }
 
