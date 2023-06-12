@@ -1,6 +1,6 @@
 //! Utility algorthims and functions used while encoding or decoding
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::{Mul, Add}, intrinsics::discriminant_value};
 use crate::pixel::{Pixel, Pixels, ColorType};
 
 /// Bits 
@@ -827,5 +827,88 @@ pub fn defiltered_to_pixels(defiltered_scanlines : Vec<Vec<u8>>, png_color_type 
 }
 
 
+//TODO: using i32s for the DCT-2 Matrix could cause large errors because sin is in [0,1].
+fn generate_dct_matrix() -> Vec<Vec<f64>> {
+    let mut dct_matrix : Vec<Vec<f64>> = vec![vec![0.0; 8]; 8];
+    
+    for i in 0..8 {
+        for j in 0..8 {
+            let coeff : f64= (i as f64) * 3.14 * (2.0 * (j as f64) + 1.0) / 16.0;
+            dct_matrix[i][j] = coeff.cos();
+        }
+    }
 
+    dct_matrix
+}
 
+pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<f64>> {
+    let zeroed_block : Vec<Vec<f64>> = block.subtract_amount(128);
+    let dct_matrix : Vec<Vec<f64>> = generate_dct_matrix();
+    let mut horizontal_block : Vec<Vec<f64>> = vec![];
+    //Horizontal:
+    for row in zeroed_block.iter() {
+        horizontal_block.push(dct_matrix.matrix_multiply(row));
+    }
+
+    let mut out_block = vec![];
+    
+    for row in horizontal_block.transpose().iter() {
+        out_block.push(dct_matrix.matrix_multiply(row))
+    }
+    
+    out_block.transpose()
+}
+
+impl SubtractAmount<f64> for Vec<Vec<u8>> {
+    fn subtract_amount(&self, amt: u8) -> Vec<Vec<f64>> {
+        let mut new_matrix = vec![];
+
+        for (row_num, row) in self.iter().enumerate() {
+            new_matrix.push(vec![]);
+            for elem in row {
+                new_matrix[row_num].push(*elem as f64 - amt as f64);
+            }
+        }
+
+        new_matrix
+    }
+}
+
+impl Transpose<f64> for Vec<Vec<f64>> { 
+    fn transpose(&self) -> Vec<Vec<f64>> {
+        let mut transposed = vec![vec![0.0; self[0].len()]; self.len()];
+        
+        for (row_num, row) in self.iter().enumerate() {
+            for (col_num, elem) in row.iter().enumerate() {
+                transposed[row_num][col_num] = *elem;
+            }
+        }
+
+        transposed
+    }
+}
+
+impl MatrixMultiply<f64> for Vec<Vec<f64>> {
+    fn matrix_multiply(&self, other: &Vec<f64>) -> Vec<f64> {
+        self.iter()
+            .map(|x| Self::dot_product(x, other))
+            .collect()
+    }
+}
+
+trait SubtractAmount<T> {
+    fn subtract_amount(&self, amt: u8) -> Vec<Vec<T>>; 
+}
+
+trait MatrixMultiply<T : Mul<Output = T> + Add<Output = T> +  From<u8> + Copy> {
+    fn dot_product(left: &Vec<T>, right: &Vec<T>) -> T{
+        left.into_iter()
+            .zip(right.into_iter())
+            .fold(T::from(0), |dot_product, (x,y)| dot_product + (*x) * (*y))
+    }
+    fn matrix_multiply(&self, other: &Vec<T>) -> Vec<T>;
+}
+
+trait Transpose<T> {
+    fn transpose(&self) -> Vec<Vec<T>>;
+}
