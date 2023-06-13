@@ -841,7 +841,7 @@ fn generate_dct_matrix() -> Vec<Vec<f64>> {
     dct_matrix
 }
 
-pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<f64>> {
+pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<i32>> {
     let zeroed_block : Vec<Vec<f64>> = block.subtract_amount(128);
     let dct_matrix : Vec<Vec<f64>> = generate_dct_matrix();
     let mut horizontal_block : Vec<Vec<f64>> = vec![];
@@ -852,11 +852,13 @@ pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<f64>> {
 
     let mut out_block = vec![];
     
+    
     for row in horizontal_block.transpose().iter() {
         out_block.push(dct_matrix.matrix_multiply(row))
     }
     
-    out_block.transpose()
+    //TODO: Figure out why this /8.0 matters;
+    out_block.transpose().into_iter().map(|x| x.into_iter().map(|y| (y/8.0) as i32).collect()).collect()
 }
 
 pub fn zig_zag<T : Copy>(matrix : Vec<Vec<T>>) -> Vec<T> {
@@ -975,10 +977,15 @@ mod tests {
             }
         }
         let subtracted = matrix.subtract_amount(5);
-        dbg!(subtracted);
         let dct_matrix = dct(matrix);
         dbg!(dct_matrix);
         assert!(false)
+    }
+
+    #[test]
+    fn check_dct_matrix() {
+        let dct_matrix = generate_dct_matrix();
+        assert_eq!(dct_matrix[0], vec![1.0f64 ;8]);
     }
 
 
