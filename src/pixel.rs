@@ -119,7 +119,7 @@ impl Pixel {
     } 
 }
 
-
+#[derive(Clone)]
 pub struct Pixels(Vec<Vec<Pixel>>);
 
 impl Pixels {

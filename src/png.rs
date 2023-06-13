@@ -277,7 +277,7 @@ impl DecPng {
     }
 
     pub fn get_scanlines(&self) -> Pixels {
-        self.scanlines
+        self.scanlines.clone()
     }
 
 }

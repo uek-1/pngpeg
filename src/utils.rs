@@ -1,6 +1,6 @@
 //! Utility algorthims and functions used while encoding or decoding
 
-use std::{collections::HashMap, ops::{Mul, Add}, intrinsics::discriminant_value};
+use std::{collections::HashMap, ops::{Mul, Add}};
 use crate::pixel::{Pixel, Pixels, ColorType};
 
 /// Bits 
@@ -859,6 +859,30 @@ pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<f64>> {
     out_block.transpose()
 }
 
+pub fn zig_zag<T : Copy>(matrix : Vec<Vec<T>>) -> Vec<T> {
+    let mut zig_vec : Vec<T> = vec![]; 
+
+    let index_matrix : Vec<Vec<usize>> = vec![
+        vec![0, 1, 8,16, 9, 2, 3,10],
+        vec![17,24,32,25,18,11, 4, 5],
+        vec![12,19,26,33,40,48,41,34],
+        vec![27,20,13, 6, 7,14,21,28],
+        vec![35,42,49,56,57,50,43,36],
+        vec![29,22,15,23,30,37,44,51],
+        vec![58,59,52,45,38,31,39,46],
+        vec![53,60,61,54,47,55,62,63],
+    ];
+
+    for row in 0..8 {
+        for col in 0..8 {
+            let index = index_matrix[row][col];
+            zig_vec.push(matrix[index / 8][index % 8]);
+        }
+    }
+
+    zig_vec
+}
+
 impl SubtractAmount<f64> for Vec<Vec<u8>> {
     fn subtract_amount(&self, amt: u8) -> Vec<Vec<f64>> {
         let mut new_matrix = vec![];
@@ -880,7 +904,7 @@ impl Transpose<f64> for Vec<Vec<f64>> {
         
         for (row_num, row) in self.iter().enumerate() {
             for (col_num, elem) in row.iter().enumerate() {
-                transposed[row_num][col_num] = *elem;
+                transposed[col_num][row_num] = *elem;
             }
         }
 
@@ -911,4 +935,51 @@ trait MatrixMultiply<T : Mul<Output = T> + Add<Output = T> +  From<u8> + Copy> {
 
 trait Transpose<T> {
     fn transpose(&self) -> Vec<Vec<T>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn check_zig_zag() {
+        let mut matrix : Vec<Vec<usize>> = vec![vec![0;8]; 8];
+        let mut count : usize = 0;
+
+        for row in 0..8 {
+            for col in 0..8 {
+                matrix[row][col] = count;
+                count += 1;
+            }
+        }
+
+        let zig = zig_zag(matrix);
+        assert_eq!(zig[2], 8);
+    }
+    
+    #[test]
+    fn check_transpose() {
+        let matrix : Vec<Vec<f64>> = vec![vec![0.0, 1.0, 2.0], vec![3.0, 4.0, 5.0], vec![6.0, 7.0, 8.0]];
+        assert_eq!(matrix.transpose()[0], vec![0.0, 3.0, 6.0])
+    }
+
+    #[test]
+    fn check_dct() {
+        let mut matrix : Vec<Vec<u8>> = vec![vec![0;8]; 8];
+        let mut count : u8 = 0;
+
+        for row in 0..8 {
+            for col in 0..8 {
+                matrix[row][col] = count;
+                //count += 1;
+            }
+        }
+        let subtracted = matrix.subtract_amount(5);
+        dbg!(subtracted);
+        let dct_matrix = dct(matrix);
+        dbg!(dct_matrix);
+        assert!(false)
+    }
+
+
 }
