@@ -861,6 +861,59 @@ pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<i32>> {
     out_block.transpose().into_iter().map(|x| x.into_iter().map(|y| (y/8.0) as i32).collect()).collect()
 }
 
+pub fn quantize_luma(block: Vec<Vec<i32>>) -> Vec<Vec<i32>> {
+    // IJG "good" quality values. 
+    let table : Vec<Vec<i32>> = vec![
+        vec![16,  11,  10,  16,  24,  40,  51,  61],
+        vec![12,  12,  14,  19,  26,  58,  60,  55],
+        vec![14,  13,  16,  24,  40,  57,  69,  56],
+        vec![14,  17,  22,  29,  51,  87,  80,  62],
+        vec![18,  22,  37,  56,  68, 109, 103,  77],
+        vec![24,  35,  55,  64,  81, 104, 113,  92],
+        vec![49,  64,  78,  87, 103, 121, 120, 101],
+        vec![72,  92,  95,  98, 112, 100, 103,  99]
+    ];
+
+    block
+        .iter()
+        .zip(table.iter())
+        .map(|(block, quant)| 
+            block
+                .iter()
+                .zip(quant.iter())
+                .map(|(x,y)| x / y)
+                .collect()
+        )
+        .collect()
+}
+
+pub fn quantize_chrom(block: Vec<Vec<i32>>) -> Vec<Vec<i32>> {
+    // IJG "good" quality values. 
+    let table : Vec<Vec<i32>> = vec![
+        vec![16,  18,  24,  47,  99,  99,  99,  99],
+        vec![18,  21,  26,  66,  99,  99,  99,  99],
+        vec![24,  26,  56,  99,  99,  99,  99,  99],
+        vec![47,  66,  99,  99,  99,  99,  99,  99],
+        vec![99,  99,  99,  99,  99,  99,  99,  99],
+        vec![99,  99,  99,  99,  99,  99,  99,  99],
+        vec![99,  99,  99,  99,  99,  99,  99,  99],
+        vec![99,  99,  99,  99,  99,  99,  99,  99]
+    ];
+
+    block
+        .iter()
+        .zip(table.iter())
+        .map(|(block, quant)| 
+            block
+                .iter()
+                .zip(quant.iter())
+                .map(|(x,y)| x / y)
+                .collect()
+        )
+        .collect()
+}
+
+
 pub fn zig_zag<T : Copy>(matrix : Vec<Vec<T>>) -> Vec<T> {
     let mut zig_vec : Vec<T> = vec![]; 
 
@@ -978,7 +1031,8 @@ mod tests {
         }
         let subtracted = matrix.subtract_amount(5);
         let dct_matrix = dct(matrix);
-        dbg!(dct_matrix);
+        let quantized = quantize_luma(dct_matrix);
+        dbg!(quantized);
         assert!(false)
     }
 
