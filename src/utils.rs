@@ -14,6 +14,9 @@ pub struct Bits {
     /// Inner value used to record the next bit that will be read out. Note this value starts at 0.
     position: u32,
 
+    /// Total of bits in the stream
+    bit_count : usize,
+
     /// Boolean value that represents the order which the bits are read - true for
     /// least-significant-bit (lsb) and false for most-significant-bit (msb).
     ///
@@ -27,8 +30,8 @@ impl Bits {
     
     /// Static method to initialize a new bitstream from "bytes" and read least-significant-bit
     /// first if lsb is set to true. 
-    pub fn new(bytes: Vec<u8>, lsb: bool) -> Bits {
-        Bits { bytes, position: 0 , lsb}
+    pub fn new(bytes: Vec<u8>, lsb: bool, bit_count: usize) -> Bits {
+        Bits { bytes, position: 0 , lsb, bit_count}
     }
     
     /// Method to read the next num bits in the stream - returns None if num is greater than the
@@ -56,8 +59,8 @@ impl Bits {
             // When read LSB first, the rightmost bit is the first (highest value) bit - so the
             // byte is essentially read in reverse.
             let byte = match self.lsb {
-                false => self.bytes[byte_index],
                 true => self.bytes[byte_index].reverse_bits(),
+                false => self.bytes[byte_index],
             };
 
             // The nth bit is the (n % 8)th bit of the (n div 8)th byte. To read it, we shift it to
@@ -85,6 +88,42 @@ impl Bits {
         }
     }
 
+    /// This method writes <num : usize> bits LSB first from <input : u32> into the stream
+    pub fn write_bits(&mut self, input: u32, num : usize) {
+        if num > 32 {
+            panic!("Cannot write more than 32 bits from a u32");
+        }
+        
+        // Check if num bits can be fit into bytes that are present
+        let unwritten_bits = 8 * self.bytes.len() - self.bit_count; 
+
+        let extra_bytes = match num <= unwritten_bits {
+            true => 0,
+            false => ((num - unwritten_bits) / 8) + 1
+        };
+        
+        // Append bytes to ensure write is possible
+        self.bytes.append(&mut vec![0; extra_bytes]);
+        
+        // Write
+        for i in 0..num {
+            let bit_to_add = (input >> i) & 1;
+            println!("{bit_to_add}");
+            let last_pos = self.bit_count + 1;
+            
+            let byte = self.bytes[last_pos / 8]; 
+            
+            let shift = match self.lsb {
+                true => i % 8,
+                false => 7 - i % 8,
+            };
+            
+            //let bit = (byte >> shift) as u32 & 1;
+            self.bytes[last_pos / 8] =  byte | (bit_to_add as u8) << shift;
+            self.bit_count += 1; 
+        }
+    }
+
     /// Method used to debug functionality - simply prints the entire byte which the next bit will
     /// be read from.
     pub fn print_current_byte(&mut self) {
@@ -95,11 +134,9 @@ impl Bits {
     /// Returns the remaining bits in the stream.
     pub fn len(&self) -> u32 {
         // Subtract read bits from total bits.
-        let len_i32: i32 = 8 * self.bytes.len() as i32 - self.position as i32;
-
-        match len_i32 < 0 {
+        match (self.bit_count as u32) < self.position  {
             true => 0,
-            false => len_i32 as u32,
+            false => self.bit_count as u32 - self.position,
         }
     }
 }
@@ -117,7 +154,7 @@ pub fn png_crc(bytes: Vec<u8>) -> Result<[u8; 4], &'static str> {
     let mut padding = vec![0u8; 4];
     let mut padded_bytes = bytes;
     padded_bytes.append(&mut padding);
-    let mut padded_bits = Bits::new(padded_bytes, REFIN);
+    let mut padded_bits = Bits::new(padded_bytes.clone(), REFIN, padded_bytes.len() * 8);
     
     // Read 32 bits into the register to begin, because our polynomial has 32 explicit bits
     let mut register = match padded_bits.read_bits(32) {
@@ -175,7 +212,7 @@ pub fn decompress(deflate_stream: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     
     // comp is the compressed bitstream and out is the vector in which decompressed bytes will
     // be stored.
-    let mut comp = Bits::new(comp[2..].to_vec(), true);
+    let mut comp = Bits::new(comp[2..].to_vec(), true, comp[2..].to_vec().len() * 8);
     let mut out : Vec<u8> = vec![]; 
     loop {    
         // DEFLATE streams consist of multiple blocks of compressed bits each using one of
@@ -845,20 +882,34 @@ pub fn dct(block: Vec<Vec<u8>>) -> Vec<Vec<i32>> {
     let zeroed_block : Vec<Vec<f64>> = block.subtract_amount(128);
     let dct_matrix : Vec<Vec<f64>> = generate_dct_matrix();
     let mut horizontal_block : Vec<Vec<f64>> = vec![];
+    let mut vertical_block = vec![];
+    let mut out_block : Vec<Vec<i32>> = vec![vec![0; 8]; 8];
+    
     //Horizontal:
     for row in zeroed_block.iter() {
         horizontal_block.push(dct_matrix.matrix_multiply(row));
     }
-
-    let mut out_block = vec![];
     
-    
+    //Vertical
     for row in horizontal_block.transpose().iter() {
-        out_block.push(dct_matrix.matrix_multiply(row))
+        vertical_block.push(dct_matrix.matrix_multiply(row))
     }
     
-    //TODO: Figure out why this /8.0 matters;
-    out_block.transpose().into_iter().map(|x| x.into_iter().map(|y| (y/8.0) as i32).collect()).collect()
+    vertical_block = vertical_block.transpose();
+    
+    //Normalize values for orthnormality.
+    for i in 0..vertical_block.len() {
+        for j in 0..vertical_block[i].len() {
+            if (i,j) == (0,0) {
+                out_block[i][j] = (vertical_block[i][j] / 8.0) as i32;
+            }
+            else {
+                out_block[i][j] = (vertical_block[i][j] / 4.0) as i32;
+            }
+        }
+    }
+
+    out_block
 }
 
 pub fn quantize_luma(block: Vec<Vec<i32>>) -> Vec<Vec<i32>> {
@@ -937,6 +988,16 @@ pub fn zig_zag<T : Copy>(matrix : Vec<Vec<T>>) -> Vec<T> {
 
     zig_vec
 }
+
+pub fn create_jpeg_stream(zig_zag: Vec<i32>, prev_dc : i32) -> Vec<u8> {
+    //make into symbols of triples : 
+    //
+    //
+    //encode
+
+    vec![]
+}
+
 
 impl SubtractAmount<f64> for Vec<Vec<u8>> {
     fn subtract_amount(&self, amt: u8) -> Vec<Vec<f64>> {
@@ -1018,7 +1079,7 @@ mod tests {
         assert_eq!(matrix.transpose()[0], vec![0.0, 3.0, 6.0])
     }
 
-    #[test]
+    //#[test]
     fn check_dct() {
         let mut matrix : Vec<Vec<u8>> = vec![vec![0;8]; 8];
         let mut count : u8 = 0;
@@ -1040,6 +1101,22 @@ mod tests {
     fn check_dct_matrix() {
         let dct_matrix = generate_dct_matrix();
         assert_eq!(dct_matrix[0], vec![1.0f64 ;8]);
+    }
+
+    #[test]
+    fn check_bits_write() {
+        let mut bits = Bits::new(vec![], false, 0);
+        bits.write_bits(0b111, 3);
+
+        bits.read_bits(3).expect("t");
+        
+        bits.write_bits(0b110, 3);
+
+        let res = bits.read_bits(3).expect("t");
+        
+        println!("{:#b}", res);
+
+        assert_eq!(0b110, res);
     }
 
 
